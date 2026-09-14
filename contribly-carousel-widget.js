@@ -86,6 +86,12 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
   var UNMUTE_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 6a9 9 0 0 1 0 12"/></svg>';
+  var FULLSCREEN_ENTER_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+  var FULLSCREEN_EXIT_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<path d="M9 3v4a2 2 0 0 1-2 2H3"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/><path d="M9 21v-4a2 2 0 0 0-2-2H3"/><path d="M15 21v-4a2 2 0 0 1 2-2h4"/></svg>';
   var ALERT_ICON_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
     '<circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16.01"/></svg>';
@@ -166,6 +172,13 @@
       ".contribly-carousel__mute{position:absolute;bottom:10px;right:10px;width:32px;height:32px;border-radius:50%;" +
       "background:rgba(0,0,0,.45);border:none;color:#fff;display:flex;align-items:center;justify-content:center;}" +
       ".contribly-carousel__mute svg{width:16px;height:16px;}" +
+      ".contribly-carousel__fullscreen{position:absolute;bottom:10px;left:10px;width:32px;height:32px;border-radius:50%;" +
+      "background:rgba(0,0,0,.45);border:none;color:#fff;display:flex;align-items:center;justify-content:center;}" +
+      ".contribly-carousel__fullscreen svg{width:16px;height:16px;}" +
+      ".contribly-carousel__media-wrap:fullscreen,.contribly-carousel__media-wrap:-webkit-full-screen{" +
+      "width:100vw;height:100vh;background:#000;display:flex;align-items:center;justify-content:center;}" +
+      ".contribly-carousel__media-wrap:fullscreen .contribly-carousel__media,.contribly-carousel__media-wrap:-webkit-full-screen .contribly-carousel__media{" +
+      "width:100%;height:100%;max-height:100vh;object-fit:contain;aspect-ratio:auto;}" +
       ".contribly-carousel__arrow{position:absolute;top:50%;transform:translateY(-50%);width:32px;height:32px;border-radius:50%;" +
       "background:var(--contribly-bg);opacity:.9;border:0.5px solid var(--contribly-border);display:flex;align-items:center;" +
       "justify-content:center;color:var(--contribly-ink);z-index:2;}" +
@@ -364,6 +377,8 @@
       pausedRemainingMs: null,
       isHeld: false,
       currentVideoEl: null,
+      videoInFullscreen: false,
+      pendingAdvanceAfterFullscreen: false,
       // Persistent DOM, created once by ensureStageStructure:
       stageEl: null,
       frameEl: null,
@@ -524,7 +539,7 @@
   function attachHoldHandlers(inst, stageEl) {
     var isControl = function (target) {
       return !!(target.closest && target.closest(
-        ".contribly-carousel__arrow, .contribly-carousel__mute, .contribly-carousel__like-btn, .contribly-carousel__share-btn"
+        ".contribly-carousel__arrow, .contribly-carousel__mute, .contribly-carousel__fullscreen, .contribly-carousel__like-btn, .contribly-carousel__share-btn"
       ));
     };
     var swipeStart = null;
@@ -627,6 +642,7 @@
 
     setTimeout(function () {
       if (oldSlideEl.parentNode) oldSlideEl.parentNode.removeChild(oldSlideEl);
+      if (oldSlideEl._fsCleanup) oldSlideEl._fsCleanup();
     }, TRANSITION_MS + 30);
 
     inst.currentSlideEl = newSlideEl;
@@ -663,6 +679,7 @@
           (mediaInfo.posterUrl ? ' poster="' + mediaInfo.posterUrl + '"' : "") +
           '><source src="' + mediaInfo.videoUrl + '" type="' + (mediaInfo.videoContentType || "video/mp4") + '"></video>';
         html += '<button class="contribly-carousel__mute" type="button" aria-label="Toggle sound">' + MUTE_SVG + "</button>";
+        html += '<button class="contribly-carousel__fullscreen" type="button" aria-label="Full screen">' + FULLSCREEN_ENTER_SVG + "</button>";
       } else {
         html += '<img class="contribly-carousel__media" src="' + mediaInfo.imageUrl + '" alt=""' + ratioStyle + " />";
       }
@@ -731,10 +748,22 @@
     var videoEl = slide.querySelector("video");
     if (videoEl) {
       inst.currentVideoEl = videoEl;
-      videoEl.addEventListener("ended", function () { advance(inst); });
+      var mediaWrap = slide.querySelector(".contribly-carousel__media-wrap");
+
+      videoEl.addEventListener("ended", function () {
+        var inFullscreen = document.fullscreenElement === mediaWrap || document.webkitFullscreenElement === mediaWrap || inst.videoInFullscreen;
+        if (inFullscreen) {
+          // Don't swap the card out from under someone mid-fullscreen-video;
+          // advance once they actually exit instead.
+          inst.pendingAdvanceAfterFullscreen = true;
+        } else {
+          advance(inst);
+        }
+      });
       videoEl.addEventListener("loadedmetadata", function () {
         if (videoEl.duration && isFinite(videoEl.duration)) startDotFill(inst, videoEl.duration * 1000);
       });
+
       var muteBtn = slide.querySelector(".contribly-carousel__mute");
       if (muteBtn) {
         muteBtn.addEventListener("click", function () {
@@ -742,6 +771,46 @@
           muteBtn.innerHTML = videoEl.muted ? MUTE_SVG : UNMUTE_SVG;
         });
       }
+
+      var fsBtn = slide.querySelector(".contribly-carousel__fullscreen");
+      if (fsBtn && mediaWrap) {
+        var onFsChange = function () {
+          var isFs = document.fullscreenElement === mediaWrap || document.webkitFullscreenElement === mediaWrap;
+          fsBtn.innerHTML = isFs ? FULLSCREEN_EXIT_SVG : FULLSCREEN_ENTER_SVG;
+          if (!isFs && inst.pendingAdvanceAfterFullscreen) {
+            inst.pendingAdvanceAfterFullscreen = false;
+            advance(inst);
+          }
+        };
+        document.addEventListener("fullscreenchange", onFsChange);
+        document.addEventListener("webkitfullscreenchange", onFsChange);
+        // iOS Safari only supports fullscreening the <video> itself, which
+        // hands off to the native OS player, not the standard Fullscreen API.
+        videoEl.addEventListener("webkitbeginfullscreen", function () { inst.videoInFullscreen = true; });
+        videoEl.addEventListener("webkitendfullscreen", function () {
+          inst.videoInFullscreen = false;
+          if (inst.pendingAdvanceAfterFullscreen) { inst.pendingAdvanceAfterFullscreen = false; advance(inst); }
+        });
+        slide._fsCleanup = function () {
+          document.removeEventListener("fullscreenchange", onFsChange);
+          document.removeEventListener("webkitfullscreenchange", onFsChange);
+        };
+
+        fsBtn.addEventListener("click", function () {
+          var isFs = document.fullscreenElement === mediaWrap || document.webkitFullscreenElement === mediaWrap;
+          if (isFs) {
+            if (document.exitFullscreen) document.exitFullscreen();
+            else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+          } else if (mediaWrap.requestFullscreen) {
+            mediaWrap.requestFullscreen().catch(function () {});
+          } else if (mediaWrap.webkitRequestFullscreen) {
+            mediaWrap.webkitRequestFullscreen();
+          } else if (videoEl.webkitEnterFullscreen) {
+            videoEl.webkitEnterFullscreen();
+          }
+        });
+      }
+
       videoEl.play().catch(function () {});
     } else {
       startDotFill(inst, DWELL_MS);

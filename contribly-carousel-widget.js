@@ -14,31 +14,50 @@
         when the video ends rather than on a fixed timer.
     Loops back to the first contribution after the last one.
 
+  TRANSITIONS:
+    Outgoing and incoming cards genuinely overlap and slide past each other
+    (direction matches travel: next slides in from the right, previous from
+    the left), rather than a sequential fade-to-blank-then-fade-in. Cards
+    vary a lot in height (video vs text-only vs a long journalist reply), so
+    the frame around them briefly resizes to whichever is taller during the
+    ~320ms transition, then settles to the new card's natural height.
+
   INTERACTION MODEL (mobile-first):
     - Press and hold anywhere on the card content to pause (freezes the timer,
       or pauses the video). No visible pause icon, the hold itself is the cue.
     - Release: waits 6 seconds before resuming, so someone who just let go
       has a moment to finish reading before it moves on.
-    - Left/right arrow buttons overlaid on the card for manual navigation,
-      unaffected by the hold-to-pause zone.
-    - Dots below the card show position only (not tappable, per instruction).
+    - A clear horizontal swipe (not just a hold) navigates immediately,
+      skipping that 6-second grace pause since it's a deliberate action.
+    - Left/right arrow buttons overlaid on the frame for manual navigation.
+    - Dots below show position only (not tappable).
+
+  LIKES AND SHARING:
+    - Likes post to /1/contributions/{id}/widgetlike, mirroring what
+      Contribly's own gallery widget actually calls in production (a one-way
+      "add a like", not the documented /like toggle endpoint). "Already
+      liked" is remembered in the visitor's own browser storage, not tied to
+      any account.
+    - Share uses the native OS share sheet where available, falling back to
+      copying a link that reopens the widget on that exact contribution
+      (via a ?contributionID= parameter), the same trick the official widget
+      uses, then tidies that parameter back out of the URL once landed.
 
   DATA:
-    - GET /1/contributions?assignment={id}&pageSize=&page= to list contributions
-      for the call-out, fetched a page at a time as the carousel approaches the
-      end of what's loaded, rather than loading everything upfront.
-    - A HEAD request first reads the X-Total-Count header so we know how many
-      dots to plan for without downloading all the data.
-    - Same field notes as the single-contribution widget apply: contributor
-      name -> attribution, location -> place, journalist reply ->
-      journalistResponse.text (may contain safe HTML, sanitised the same way).
+    - GET /1/contributions?assignment={id}&pageSize=&page= to list contributions,
+      fetched a page at a time as the carousel nears the end of what's loaded.
+    - A HEAD request first reads X-Total-Count so dots know the total without
+      downloading everything.
+    - Field notes: contributor name -> attribution, location -> place,
+      journalist reply -> journalistResponse.text (may contain safe HTML,
+      sanitised with an allow-list), media artifacts -> mediaUsages[0].artifacts
+      (not nested inside .media), video artifacts share their array with
+      poster images and an audio-only track so we pick by contentType.
 
   ACCESSIBILITY:
-    The journalist-reply icon carries a hidden label. Since Contribly's own
-    gallery widget already ships real translations for this exact concept
-    ("Response"/"Réponse"/"Reactie"/etc), we're using those directly rather
-    than guessing, this is more complete than the single-contribution widget's
-    English-only placeholder.
+    The journalist-reply icon's hidden label uses Contribly's own real
+    translations for this concept ("Response"/"Réponse"/"Reactie"/etc),
+    taken from their gallery widget rather than guessed.
 */
 
 (function () {
@@ -47,7 +66,10 @@
   var DWELL_MS = 2500;
   var HOLD_RELEASE_GRACE_MS = 6000;
   var MAX_VISIBLE_DOTS = 8;
-  var FADE_MS = 200;
+  var TRANSITION_MS = 320;
+  var SWIPE_THRESHOLD_PX = 40;
+  var MAX_DEEP_LINK_PAGES = 20;
+  var LIKED_STORAGE_PREFIX = "contribly-liked-";
 
   var LOCATION_PIN_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
@@ -80,9 +102,8 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
 
   // Real Contribly wording for "journalist reply", taken from their own
-  // gallery widget (contribution.response), not guessed. Used as the hidden
-  // accessible label on the reply icon. loadError has no equivalent in that
-  // source so stays English-only until we have one.
+  // gallery widget (contribution.response), not guessed. loadError has no
+  // equivalent there so stays English-only until we have one.
   var TRANSLATIONS = {
     "en-gb": { newsroomReply: "Response", loadError: "This contribution couldn't be loaded.", prev: "Previous", next: "Next" },
     "en-us": { newsroomReply: "Response", loadError: "This contribution couldn't be loaded.", prev: "Previous", next: "Next" },
@@ -122,13 +143,13 @@
       "--contribly-ink:#f2f1f7;--contribly-muted:#a3a2ad;--contribly-accent:#a5a0fb;--contribly-accent-tint:#2b2757;" +
       "--contribly-shadow:rgba(0,0,0,.35);--contribly-shimmer-a:#2a2a33;--contribly-shimmer-b:#34343f;}}" +
       ".contribly-carousel *{box-sizing:border-box;}" +
-      ".contribly-carousel__stage{position:relative;touch-action:pan-y;opacity:1;transition:opacity " + FADE_MS + "ms ease;}" +
-      ".contribly-carousel__stage--hidden{opacity:0;}" +
-      ".contribly-carousel__card{background:var(--contribly-bg);border-radius:var(--contribly-radius);overflow:hidden;" +
-      "border:0.5px solid var(--contribly-border);box-shadow:0 1px 2px var(--contribly-shadow),0 8px 20px var(--contribly-shadow);" +
+      ".contribly-carousel__stage{position:relative;touch-action:pan-y;}" +
+      ".contribly-carousel__frame{position:relative;background:var(--contribly-bg);border-radius:var(--contribly-radius);" +
+      "overflow:hidden;border:0.5px solid var(--contribly-border);box-shadow:0 1px 2px var(--contribly-shadow),0 8px 20px var(--contribly-shadow);" +
       "-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}" +
+      ".contribly-carousel__slide{position:absolute;top:0;left:0;width:100%;}" +
       ".contribly-carousel__loading{aspect-ratio:4/3;background:linear-gradient(90deg,var(--contribly-shimmer-a) 25%,var(--contribly-shimmer-b) 37%,var(--contribly-shimmer-a) 63%);" +
-      "background-size:400% 100%;animation:contribly-carousel-shimmer 1.4s ease infinite;}" +
+      "background-size:400% 100%;animation:contribly-carousel-shimmer 1.4s ease infinite;border-radius:var(--contribly-radius);}" +
       "@keyframes contribly-carousel-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}" +
       ".contribly-carousel__error{padding:24px 16px;color:var(--contribly-muted);font-size:13px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;}" +
       ".contribly-carousel__error svg{width:22px;height:22px;}" +
@@ -155,13 +176,14 @@
       ".contribly-carousel__headline{font-weight:600;font-size:14px;margin:0 0 6px;color:var(--contribly-ink);}" +
       ".contribly-carousel__text{font-size:14px;line-height:1.6;margin:0 0 12px;color:var(--contribly-ink);}" +
       ".contribly-carousel__content > .contribly-carousel__text:last-child{margin-bottom:0;}" +
-      ".contribly-carousel__response{background:var(--contribly-accent-tint);border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;}" +
+      ".contribly-carousel__response{background:var(--contribly-accent-tint);border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;}" +
       ".contribly-carousel__response svg{width:20px;height:20px;flex-shrink:0;margin-top:1px;color:var(--contribly-accent);}" +
       ".contribly-carousel__response-body{font-size:13px;line-height:1.6;color:var(--contribly-ink);white-space:pre-line;}" +
       ".contribly-carousel__response-body p{margin:0 0 8px;}" +
       ".contribly-carousel__response-body p:last-child{margin-bottom:0;}" +
       ".contribly-carousel__response-body a{color:var(--contribly-accent);text-decoration:underline;}" +
-      ".contribly-carousel__likes{margin-top:12px;display:flex;align-items:center;justify-content:space-between;}" +
+      ".contribly-carousel__sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}" +
+      ".contribly-carousel__likes{display:flex;align-items:center;justify-content:space-between;}" +
       ".contribly-carousel__like-btn,.contribly-carousel__share-btn{background:none;border:none;padding:4px;display:flex;" +
       "align-items:center;gap:6px;color:var(--contribly-muted);cursor:pointer;}" +
       ".contribly-carousel__like-btn{padding-left:0;}" +
@@ -170,7 +192,6 @@
       ".contribly-carousel__like-btn.liked svg{transform:scale(1.15);}" +
       ".contribly-carousel__share-btn.copied{color:var(--contribly-accent);}" +
       ".contribly-carousel__like-count{font-size:13px;}" +
-      ".contribly-carousel__sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}" +
       ".contribly-carousel__dots{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:12px;}" +
       ".contribly-carousel__dot{width:6px;height:6px;border-radius:50%;background:var(--contribly-border);flex-shrink:0;}" +
       ".contribly-carousel__dot--active{width:16px;height:6px;border-radius:3px;background:var(--contribly-border);overflow:hidden;position:relative;}" +
@@ -242,8 +263,6 @@
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
 
-  var LIKED_STORAGE_PREFIX = "contribly-liked-";
-
   function hasLikedLocally(id) {
     try { return window.localStorage.getItem(LIKED_STORAGE_PREFIX + id) === "1"; } catch (e) { return false; }
   }
@@ -254,10 +273,9 @@
 
   function sendLike(id) {
     // Mirrors the endpoint Contribly's own gallery widget actually calls in
-    // production (a one-way "add a like", not a toggle). The published API
-    // docs instead describe POST /1/contributions/{id}/like as a like/unlike
-    // toggle. If Contribly confirms that's preferred for custom widgets,
-    // this is the only line that needs to change.
+    // production (a one-way "add a like", not a toggle). If Contribly
+    // confirms the documented /like toggle is preferred, this is the one
+    // line to change.
     fetch("https://api.contribly.com/1/contributions/" + encodeURIComponent(id) + "/widgetlike", { method: "POST" })
       .catch(function () { /* best-effort: the visible count is already updated locally */ });
   }
@@ -267,16 +285,11 @@
       var url = new URL(window.location.href);
       url.searchParams.set("contributionID", id);
       return url.toString();
-    } catch (e) {
-      return window.location.href;
-    }
+    } catch (e) { return window.location.href; }
   }
 
   function copyToClipboard(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text);
-    }
-    // Fallback for browsers without the Clipboard API.
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
     return new Promise(function (resolve, reject) {
       try {
         var textarea = document.createElement("textarea");
@@ -290,6 +303,18 @@
         resolve();
       } catch (e) { reject(e); }
     });
+  }
+
+  function getSharedContributionId() {
+    try { return new URLSearchParams(window.location.search).get("contributionID"); } catch (e) { return null; }
+  }
+
+  function clearSharedContributionIdFromUrl() {
+    try {
+      var url = new URL(window.location.href);
+      url.searchParams.delete("contributionID");
+      window.history.replaceState({}, document.title, url.toString());
+    } catch (e) { /* non-fatal */ }
   }
 
   function pickArtifactByType(artifacts, contentTypePrefix, preferredLabels) {
@@ -339,7 +364,12 @@
       pausedRemainingMs: null,
       isHeld: false,
       currentVideoEl: null,
+      // Persistent DOM, created once by ensureStageStructure:
       stageEl: null,
+      frameEl: null,
+      dotsEl: null,
+      currentSlideEl: null,
+      activeDotFillEl: null,
     };
   }
 
@@ -372,10 +402,7 @@
   }
 
   function maybePrefetch(inst) {
-    // Fetch the next page once we're within 2 items of the end of what's loaded.
-    if (!inst.allLoaded && inst.currentIndex >= inst.items.length - 2) {
-      fetchPage(inst, inst.nextPage);
-    }
+    if (!inst.allLoaded && inst.currentIndex >= inst.items.length - 2) fetchPage(inst, inst.nextPage);
   }
 
   function clearTimers(inst) {
@@ -383,43 +410,53 @@
     if (inst.resumeTimeoutId) { clearTimeout(inst.resumeTimeoutId); inst.resumeTimeoutId = null; }
   }
 
-  function goToIndex(inst, index, direction) {
-    clearTimers(inst);
-    if (inst.currentVideoEl) { inst.currentVideoEl.pause(); inst.currentVideoEl = null; }
-    var len = inst.items.length;
-    if (len === 0) return;
-    var newIndex = index;
-    if (newIndex >= len) {
-      // Loop back to the start once we know we've loaded everything;
-      // otherwise wait for more pages before wrapping.
-      newIndex = inst.allLoaded ? 0 : len - 1;
-    }
-    if (newIndex < 0) newIndex = inst.allLoaded ? len - 1 : 0;
-    inst.currentIndex = newIndex;
+  // ---- Persistent chrome: created once, reused across every slide ----
 
-    var swapIn = function () {
-      renderSlide(inst);
-      maybePrefetch(inst);
-    };
+  function ensureStageStructure(inst) {
+    if (inst.stageEl) return;
 
-    if (inst.stageEl) {
-      // Fade the outgoing card out, then build the new one. The new card
-      // fades itself in on insertion (see renderSlide), so this reads as
-      // one continuous cross-fade rather than two separate animations.
-      inst.stageEl.classList.add("contribly-carousel__stage--hidden");
-      setTimeout(swapIn, FADE_MS);
-    } else {
-      swapIn();
-    }
+    var stage = document.createElement("div");
+    stage.className = "contribly-carousel__stage";
+
+    var frame = document.createElement("div");
+    frame.className = "contribly-carousel__frame";
+    stage.appendChild(frame);
+
+    var prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "contribly-carousel__arrow contribly-carousel__arrow--prev";
+    prevBtn.setAttribute("aria-label", translate(inst.lang, "prev"));
+    prevBtn.innerHTML = CHEVRON_LEFT_SVG;
+    prevBtn.addEventListener("click", function () { goToIndex(inst, inst.currentIndex - 1, -1); });
+    stage.appendChild(prevBtn);
+
+    var nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "contribly-carousel__arrow contribly-carousel__arrow--next";
+    nextBtn.setAttribute("aria-label", translate(inst.lang, "next"));
+    nextBtn.innerHTML = CHEVRON_RIGHT_SVG;
+    nextBtn.addEventListener("click", function () { goToIndex(inst, inst.currentIndex + 1, 1); });
+    stage.appendChild(nextBtn);
+
+    var dots = document.createElement("div");
+    dots.className = "contribly-carousel__dots";
+
+    inst.root.innerHTML = "";
+    inst.root.appendChild(stage);
+    inst.root.appendChild(dots);
+
+    inst.stageEl = stage;
+    inst.frameEl = frame;
+    inst.dotsEl = dots;
+
+    attachHoldHandlers(inst, stage);
   }
 
-  function advance(inst) { goToIndex(inst, inst.currentIndex + 1, 1); }
-
-  function renderDots(inst) {
+  function updateDots(inst) {
     var total = inst.total;
-    var wrap = document.createElement("div");
-    wrap.className = "contribly-carousel__dots";
-    if (!total || total <= 1) return wrap;
+    inst.dotsEl.innerHTML = "";
+    inst.activeDotFillEl = null;
+    if (!total || total <= 1) return;
     var count = Math.min(total, MAX_VISIBLE_DOTS);
     var start = Math.max(0, Math.min(inst.currentIndex - Math.floor(count / 2), total - count));
     for (var i = 0; i < count; i++) {
@@ -434,24 +471,21 @@
       } else {
         dot.className = "contribly-carousel__dot";
       }
-      wrap.appendChild(dot);
+      inst.dotsEl.appendChild(dot);
     }
-    return wrap;
   }
 
   function startDotFill(inst, durationMs) {
     if (!inst.activeDotFillEl) return;
     var fill = inst.activeDotFillEl;
     fill.style.animationDuration = durationMs + "ms";
-    // Force reflow so the animation restarts cleanly for the new slide.
     fill.classList.remove("running");
-    void fill.offsetWidth;
+    void fill.offsetWidth; // restart the animation cleanly
     fill.classList.add("running");
   }
 
   function setDotFillHeld(inst, held) {
-    if (!inst.activeDotFillEl) return;
-    inst.activeDotFillEl.classList.toggle("held", held);
+    if (inst.activeDotFillEl) inst.activeDotFillEl.classList.toggle("held", held);
   }
 
   function scheduleDwell(inst, ms) {
@@ -477,8 +511,6 @@
   function onHoldEnd(inst) {
     if (!inst.isHeld) return;
     inst.isHeld = false;
-    // Grace period: wait a bit longer before actually resuming, so letting
-    // go doesn't feel like it instantly snatches the content away.
     inst.resumeTimeoutId = setTimeout(function () {
       setDotFillHeld(inst, false);
       if (inst.currentVideoEl) {
@@ -489,11 +521,11 @@
     }, HOLD_RELEASE_GRACE_MS);
   }
 
-  var SWIPE_THRESHOLD_PX = 40;
-
   function attachHoldHandlers(inst, stageEl) {
     var isControl = function (target) {
-      return !!(target.closest && target.closest(".contribly-carousel__arrow, .contribly-carousel__mute, .contribly-carousel__like-btn, .contribly-carousel__share-btn"));
+      return !!(target.closest && target.closest(
+        ".contribly-carousel__arrow, .contribly-carousel__mute, .contribly-carousel__like-btn, .contribly-carousel__share-btn"
+      ));
     };
     var swipeStart = null;
 
@@ -511,9 +543,8 @@
         var dy = e.clientY - swipeStart.y;
         if (Math.abs(dx) >= SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy)) {
           wasSwipe = true;
-          inst.isHeld = false; // a deliberate swipe skips the hold-release grace pause
+          inst.isHeld = false;
           if (inst.resumeTimeoutId) { clearTimeout(inst.resumeTimeoutId); inst.resumeTimeoutId = null; }
-          // Swipe left reveals the next card (like turning a page); swipe right goes back.
           goToIndex(inst, inst.currentIndex + (dx < 0 ? 1 : -1), dx < 0 ? 1 : -1);
         }
       }
@@ -530,15 +561,85 @@
     });
   }
 
-  function renderSlide(inst) {
+  // ---- Slide navigation and the overlapping transition ----
+
+  function goToIndex(inst, index, direction) {
+    clearTimers(inst);
+    if (inst.currentVideoEl) { inst.currentVideoEl.pause(); inst.currentVideoEl = null; }
+    var len = inst.items.length;
+    if (len === 0) return;
+    var newIndex = index;
+    if (newIndex >= len) newIndex = inst.allLoaded ? 0 : len - 1;
+    if (newIndex < 0) newIndex = inst.allLoaded ? len - 1 : 0;
+    inst.currentIndex = newIndex;
+
+    var newSlide = buildSlide(inst);
+    mountSlide(inst, newSlide, direction || 1);
+    updateDots(inst);
+    maybePrefetch(inst);
+  }
+
+  function advance(inst) { goToIndex(inst, inst.currentIndex + 1, 1); }
+
+  function mountSlide(inst, newSlideEl, direction) {
+    var frame = inst.frameEl;
+    var oldSlideEl = inst.currentSlideEl;
+
+    if (!oldSlideEl) {
+      // First slide ever: no previous card to transition from, just show it.
+      newSlideEl.style.position = "absolute";
+      newSlideEl.style.top = "0";
+      newSlideEl.style.left = "0";
+      newSlideEl.style.width = "100%";
+      frame.appendChild(newSlideEl);
+      frame.style.height = newSlideEl.offsetHeight + "px";
+      inst.currentSlideEl = newSlideEl;
+      return;
+    }
+
+    // Position the incoming slide off to the side (matching travel direction)
+    // before it's visible, then measure it, then animate both cards past
+    // each other while the frame resizes to the incoming card's height.
+    newSlideEl.style.transition = "none";
+    newSlideEl.style.transform = "translateX(" + (direction >= 0 ? "100%" : "-100%") + ")";
+    newSlideEl.style.opacity = "0";
+    frame.appendChild(newSlideEl);
+
+    var oldHeight = oldSlideEl.offsetHeight;
+    var newHeight = newSlideEl.offsetHeight;
+
+    frame.style.transition = "none";
+    frame.style.height = Math.max(oldHeight, newHeight) + "px";
+
+    void frame.offsetHeight; // force reflow before re-enabling transitions
+
+    frame.style.transition = "height " + TRANSITION_MS + "ms ease";
+    newSlideEl.style.transition = "transform " + TRANSITION_MS + "ms ease, opacity " + TRANSITION_MS + "ms ease";
+    oldSlideEl.style.transition = "transform " + TRANSITION_MS + "ms ease, opacity " + TRANSITION_MS + "ms ease";
+
+    requestAnimationFrame(function () {
+      frame.style.height = newHeight + "px";
+      newSlideEl.style.transform = "translateX(0)";
+      newSlideEl.style.opacity = "1";
+      oldSlideEl.style.transform = "translateX(" + (direction >= 0 ? "-100%" : "100%") + ")";
+      oldSlideEl.style.opacity = "0";
+    });
+
+    setTimeout(function () {
+      if (oldSlideEl.parentNode) oldSlideEl.parentNode.removeChild(oldSlideEl);
+    }, TRANSITION_MS + 30);
+
+    inst.currentSlideEl = newSlideEl;
+  }
+
+  // Builds a slide's DOM and wires its internal behaviour (video, like,
+  // share, response sanitising). Does NOT insert or animate it, that's
+  // mountSlide's job, kept separate so this stays easy to reason about.
+  function buildSlide(inst) {
     var item = inst.items[inst.currentIndex];
-    if (!item) return;
-
-    var stage = document.createElement("div");
-    stage.className = "contribly-carousel__stage";
-
-    var card = document.createElement("div");
-    card.className = "contribly-carousel__card";
+    var slide = document.createElement("div");
+    slide.className = "contribly-carousel__slide";
+    if (!item) return slide;
 
     var html = "";
     var displayName = item.attribution || "Community contributor";
@@ -586,94 +687,55 @@
       '<span class="contribly-carousel__like-count">' + likeCount + "</span></button>" +
       '<button type="button" class="contribly-carousel__share-btn" aria-label="Share">' + SHARE_SVG + "</button>" +
       "</div>";
-
     html += "</div>";
 
-    card.innerHTML = html;
+    slide.innerHTML = html;
 
-    var prevBtn = document.createElement("button");
-    prevBtn.type = "button";
-    prevBtn.className = "contribly-carousel__arrow contribly-carousel__arrow--prev";
-    prevBtn.setAttribute("aria-label", translate(inst.lang, "prev"));
-    prevBtn.innerHTML = CHEVRON_LEFT_SVG;
-    prevBtn.addEventListener("click", function () { goToIndex(inst, inst.currentIndex - 1, -1); });
+    if (hasResponse) {
+      ensureDOMPurify(function () {
+        var bodyEl = slide.querySelector(".contribly-carousel__response-body");
+        if (bodyEl) bodyEl.innerHTML = sanitiseResponseHtml(item.journalistResponse.text);
+      });
+    }
 
-    var nextBtn = document.createElement("button");
-    nextBtn.type = "button";
-    nextBtn.className = "contribly-carousel__arrow contribly-carousel__arrow--next";
-    nextBtn.setAttribute("aria-label", translate(inst.lang, "next"));
-    nextBtn.innerHTML = CHEVRON_RIGHT_SVG;
-    nextBtn.addEventListener("click", function () { goToIndex(inst, inst.currentIndex + 1, 1); });
-
-    var likeBtn = card.querySelector(".contribly-carousel__like-btn");
+    var likeBtn = slide.querySelector(".contribly-carousel__like-btn");
     if (likeBtn) {
       likeBtn.addEventListener("click", function () {
-        if (hasLikedLocally(item.id)) return; // one-way, matches Contribly's own widget behaviour
+        if (hasLikedLocally(item.id)) return;
         markLikedLocally(item.id);
+        item.allLikes = likeCount + 1;
         likeBtn.classList.add("liked");
         likeBtn.setAttribute("aria-pressed", "true");
-        likeBtn.innerHTML = HEART_FILLED_SVG + '<span class="contribly-carousel__like-count">' + (likeCount + 1) + "</span>";
+        likeBtn.innerHTML = HEART_FILLED_SVG + '<span class="contribly-carousel__like-count">' + item.allLikes + "</span>";
         sendLike(item.id);
       });
     }
 
-    var shareBtn = card.querySelector(".contribly-carousel__share-btn");
+    var shareBtn = slide.querySelector(".contribly-carousel__share-btn");
     if (shareBtn) {
       shareBtn.addEventListener("click", function () {
         var url = buildShareUrl(item.id);
         if (navigator.share) {
-          navigator.share({ url: url, title: item.headline || undefined, text: item.body || undefined }).catch(function () {
-            // Cancelled or unsupported combination of fields, no action needed.
-          });
+          navigator.share({ url: url, title: item.headline || undefined, text: item.body || undefined }).catch(function () {});
           return;
         }
         copyToClipboard(url).then(function () {
           var original = shareBtn.innerHTML;
           shareBtn.innerHTML = CHECK_SVG;
           shareBtn.classList.add("copied");
-          setTimeout(function () {
-            shareBtn.innerHTML = original;
-            shareBtn.classList.remove("copied");
-          }, 1500);
+          setTimeout(function () { shareBtn.innerHTML = original; shareBtn.classList.remove("copied"); }, 1500);
         });
       });
     }
 
-    stage.appendChild(card);
-    stage.appendChild(prevBtn);
-    stage.appendChild(nextBtn);
-
-    // Start hidden with transitions off, insert, force a reflow, then turn
-    // transitions back on and reveal, this is what makes the browser
-    // actually animate the fade-in rather than just snapping to visible.
-    stage.classList.add("contribly-carousel__stage--hidden");
-    stage.style.transition = "none";
-
-    inst.root.innerHTML = "";
-    inst.root.appendChild(stage);
-    inst.root.appendChild(renderDots(inst));
-    inst.stageEl = stage;
-    attachHoldHandlers(inst, stage);
-
-    void stage.offsetWidth; // force reflow
-    stage.style.transition = "";
-    stage.classList.remove("contribly-carousel__stage--hidden");
-
-    if (hasResponse) {
-      ensureDOMPurify(function () {
-        var bodyEl = card.querySelector(".contribly-carousel__response-body");
-        if (bodyEl) bodyEl.innerHTML = sanitiseResponseHtml(item.journalistResponse.text);
-      });
-    }
-
-    var videoEl = card.querySelector("video");
+    var videoEl = slide.querySelector("video");
     if (videoEl) {
       inst.currentVideoEl = videoEl;
       videoEl.addEventListener("ended", function () { advance(inst); });
       videoEl.addEventListener("loadedmetadata", function () {
         if (videoEl.duration && isFinite(videoEl.duration)) startDotFill(inst, videoEl.duration * 1000);
       });
-      var muteBtn = card.querySelector(".contribly-carousel__mute");
+      var muteBtn = slide.querySelector(".contribly-carousel__mute");
       if (muteBtn) {
         muteBtn.addEventListener("click", function () {
           videoEl.muted = !videoEl.muted;
@@ -685,6 +747,8 @@
       startDotFill(inst, DWELL_MS);
       scheduleDwell(inst, DWELL_MS);
     }
+
+    return slide;
   }
 
   function renderError(inst) {
@@ -692,26 +756,8 @@
       '<span class="contribly-carousel__sr-only">' + escapeHtml(translate(inst.lang, "loadError")) + "</span></div>";
   }
 
-  var MAX_DEEP_LINK_PAGES = 20; // safety cap so a missing/old ID can't trigger unbounded fetching
-
-  function getSharedContributionId() {
-    try {
-      return new URLSearchParams(window.location.search).get("contributionID");
-    } catch (e) { return null; }
-  }
-
-  function clearSharedContributionIdFromUrl() {
-    try {
-      var url = new URL(window.location.href);
-      url.searchParams.delete("contributionID");
-      window.history.replaceState({}, document.title, url.toString());
-    } catch (e) { /* non-fatal: URL just keeps the param */ }
-  }
-
   function findIndexById(inst, id) {
-    for (var i = 0; i < inst.items.length; i++) {
-      if (inst.items[i].id === id) return i;
-    }
+    for (var i = 0; i < inst.items.length; i++) if (inst.items[i].id === id) return i;
     return -1;
   }
 
@@ -720,9 +766,7 @@
     var foundIndex = findIndexById(inst, targetId);
     if (foundIndex !== -1) return Promise.resolve(foundIndex);
     if (inst.allLoaded || inst.nextPage > MAX_DEEP_LINK_PAGES) return Promise.resolve(0);
-    return fetchPage(inst, inst.nextPage).then(function () {
-      return resolveStartIndex(inst, targetId);
-    });
+    return fetchPage(inst, inst.nextPage).then(function () { return resolveStartIndex(inst, targetId); });
   }
 
   function initInstance(root) {
@@ -739,6 +783,7 @@
       .then(function (startIndex) {
         if (!inst.items.length) { renderError(inst); return; }
         if (sharedId) clearSharedContributionIdFromUrl();
+        ensureStageStructure(inst);
         goToIndex(inst, startIndex);
       })
       .catch(function () { renderError(inst); });

@@ -1,0 +1,580 @@
+/*
+  CONTRIBLY - AUTO-ADVANCING CONTRIBUTION CAROUSEL (for a whole assignment/call-out)
+  ===================================================================================
+  HOW TO EMBED THIS ON A PAGE (once this file is hosted somewhere public):
+
+    <div class="contribly-carousel" data-assignment="THE-ASSIGNMENT-ID" data-language="en-gb"></div>
+    <script src="https://YOUR-HOSTING-URL/contribly-carousel-widget.js" defer></script>
+
+  WHAT THIS DOES:
+    Shows one contribution at a time from an assignment (call-out), full card,
+    nothing hidden behind a click. Advances automatically:
+      - Photo/text contributions: every 2.5 seconds.
+      - Video contributions: autoplays (muted, required by browsers), advances
+        when the video ends rather than on a fixed timer.
+    Loops back to the first contribution after the last one.
+
+  INTERACTION MODEL (mobile-first):
+    - Press and hold anywhere on the card content to pause (freezes the timer,
+      or pauses the video). No visible pause icon, the hold itself is the cue.
+    - Release: waits 6 seconds before resuming, so someone who just let go
+      has a moment to finish reading before it moves on.
+    - Left/right arrow buttons overlaid on the card for manual navigation,
+      unaffected by the hold-to-pause zone.
+    - Dots below the card show position only (not tappable, per instruction).
+
+  DATA:
+    - GET /1/contributions?assignment={id}&pageSize=&page= to list contributions
+      for the call-out, fetched a page at a time as the carousel approaches the
+      end of what's loaded, rather than loading everything upfront.
+    - A HEAD request first reads the X-Total-Count header so we know how many
+      dots to plan for without downloading all the data.
+    - Same field notes as the single-contribution widget apply: contributor
+      name -> attribution, location -> place, journalist reply ->
+      journalistResponse.text (may contain safe HTML, sanitised the same way).
+
+  ACCESSIBILITY:
+    The journalist-reply icon carries a hidden label. Since Contribly's own
+    gallery widget already ships real translations for this exact concept
+    ("Response"/"Réponse"/"Reactie"/etc), we're using those directly rather
+    than guessing, this is more complete than the single-contribution widget's
+    English-only placeholder.
+*/
+
+(function () {
+  var STYLE_ID = "contribly-carousel-styles";
+  var DOMPURIFY_SRC = "https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js";
+  var DWELL_MS = 2500;
+  var HOLD_RELEASE_GRACE_MS = 6000;
+  var MAX_VISIBLE_DOTS = 8;
+
+  var LOCATION_PIN_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/>' +
+    '<circle cx="12" cy="9.5" r="2.3"/></svg>';
+  var REPLY_ICON_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.4 8.7 8.7 0 0 1-4-1L3 20l1.1-5.5a8.4 8.4 0 0 1-1-4A8.38 8.38 0 0 1 11.6 2a8.5 8.5 0 0 1 9.4 9.5z"/></svg>';
+  var CHEVRON_LEFT_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>';
+  var CHEVRON_RIGHT_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
+  var MUTE_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
+  var UNMUTE_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 6a9 9 0 0 1 0 12"/></svg>';
+  var ALERT_ICON_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16.01"/></svg>';
+
+  // Real Contribly wording for "journalist reply", taken from their own
+  // gallery widget (contribution.response), not guessed. Used as the hidden
+  // accessible label on the reply icon. loadError has no equivalent in that
+  // source so stays English-only until we have one.
+  var TRANSLATIONS = {
+    "en-gb": { newsroomReply: "Response", loadError: "This contribution couldn't be loaded.", prev: "Previous", next: "Next" },
+    "en-us": { newsroomReply: "Response", loadError: "This contribution couldn't be loaded.", prev: "Previous", next: "Next" },
+    "en-ie": { newsroomReply: "Response", loadError: "This contribution couldn't be loaded.", prev: "Previous", next: "Next" },
+    "fr-fr": { newsroomReply: "Réponse", loadError: "This contribution couldn't be loaded.", prev: "Précédent", next: "Suivant" },
+    "nl-nl": { newsroomReply: "Reactie", loadError: "This contribution couldn't be loaded.", prev: "Vorige", next: "Volgende" },
+    "nl-be": { newsroomReply: "Reactie", loadError: "This contribution couldn't be loaded.", prev: "Vorige", next: "Volgende" },
+    "es-es": { newsroomReply: "Respuesta", loadError: "This contribution couldn't be loaded.", prev: "Anterior", next: "Siguiente" },
+    "de-de": { newsroomReply: "Antwort", loadError: "This contribution couldn't be loaded.", prev: "Zurück", next: "Vor" },
+    "fi-fi": { newsroomReply: "Vastaus", loadError: "This contribution couldn't be loaded.", prev: "Edellinen", next: "Seuraava" },
+    "hr-hr": { newsroomReply: "Odgovor", loadError: "This contribution couldn't be loaded.", prev: "Prethodno", next: "Sljedeće" },
+    "ro-ro": { newsroomReply: "Răspuns", loadError: "This contribution couldn't be loaded.", prev: "Anterior", next: "Următorul" },
+  };
+  var DEFAULT_LANGUAGE = "en-gb";
+
+  function translate(lang, key) {
+    var normalised = (lang || DEFAULT_LANGUAGE).toLowerCase();
+    if (TRANSLATIONS[normalised] && TRANSLATIONS[normalised][key]) return TRANSLATIONS[normalised][key];
+    var base = normalised.split("-")[0];
+    var baseMatch = Object.keys(TRANSLATIONS).filter(function (c) { return c.split("-")[0] === base; })[0];
+    if (baseMatch) return TRANSLATIONS[baseMatch][key];
+    return TRANSLATIONS[DEFAULT_LANGUAGE][key];
+  }
+
+  function injectStylesOnce() {
+    if (document.getElementById(STYLE_ID)) return;
+    var style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent =
+      ".contribly-carousel{--contribly-bg:#ffffff;--contribly-border:#e9e8f2;--contribly-ink:#17171a;" +
+      "--contribly-muted:#6e6e76;--contribly-accent:#4f46e5;--contribly-accent-tint:#eef0ff;" +
+      "--contribly-shadow:rgba(20,20,43,.05);--contribly-shimmer-a:#eeedf7;--contribly-shimmer-b:#f7f6fc;" +
+      "--contribly-radius:16px;--contribly-font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;" +
+      "max-width:400px;width:100%;box-sizing:border-box;font-family:var(--contribly-font);color:var(--contribly-ink);}" +
+      "@media (prefers-color-scheme:dark){.contribly-carousel{--contribly-bg:#1c1c22;--contribly-border:#2e2e38;" +
+      "--contribly-ink:#f2f1f7;--contribly-muted:#a3a2ad;--contribly-accent:#a5a0fb;--contribly-accent-tint:#2b2757;" +
+      "--contribly-shadow:rgba(0,0,0,.35);--contribly-shimmer-a:#2a2a33;--contribly-shimmer-b:#34343f;}}" +
+      ".contribly-carousel *{box-sizing:border-box;}" +
+      ".contribly-carousel__stage{position:relative;touch-action:pan-y;}" +
+      ".contribly-carousel__card{background:var(--contribly-bg);border-radius:var(--contribly-radius);overflow:hidden;" +
+      "border:0.5px solid var(--contribly-border);box-shadow:0 1px 2px var(--contribly-shadow),0 8px 20px var(--contribly-shadow);" +
+      "-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}" +
+      ".contribly-carousel__loading{aspect-ratio:4/3;background:linear-gradient(90deg,var(--contribly-shimmer-a) 25%,var(--contribly-shimmer-b) 37%,var(--contribly-shimmer-a) 63%);" +
+      "background-size:400% 100%;animation:contribly-carousel-shimmer 1.4s ease infinite;}" +
+      "@keyframes contribly-carousel-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}" +
+      ".contribly-carousel__error{padding:24px 16px;color:var(--contribly-muted);font-size:13px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;}" +
+      ".contribly-carousel__error svg{width:22px;height:22px;}" +
+      ".contribly-carousel__header{display:flex;align-items:center;gap:10px;padding:14px 16px;}" +
+      ".contribly-carousel__avatar{width:36px;height:36px;border-radius:50%;background:var(--contribly-accent-tint);" +
+      "display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;color:var(--contribly-accent);flex-shrink:0;}" +
+      ".contribly-carousel__identity{flex:1;min-width:0;}" +
+      ".contribly-carousel__name{font-weight:600;font-size:14px;margin:0;color:var(--contribly-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}" +
+      ".contribly-carousel__location{display:flex;align-items:center;gap:4px;margin-top:2px;font-size:12px;color:var(--contribly-muted);}" +
+      ".contribly-carousel__location svg{width:12px;height:12px;flex-shrink:0;}" +
+      ".contribly-carousel__date{font-size:12px;color:var(--contribly-muted);white-space:nowrap;margin-left:auto;}" +
+      ".contribly-carousel__media-wrap{position:relative;}" +
+      ".contribly-carousel__media{display:block;width:100%;height:auto;object-fit:cover;background:var(--contribly-accent-tint);-webkit-touch-callout:none;}" +
+      ".contribly-carousel__mute{position:absolute;bottom:10px;right:10px;width:32px;height:32px;border-radius:50%;" +
+      "background:rgba(0,0,0,.45);border:none;color:#fff;display:flex;align-items:center;justify-content:center;}" +
+      ".contribly-carousel__mute svg{width:16px;height:16px;}" +
+      ".contribly-carousel__arrow{position:absolute;top:50%;transform:translateY(-50%);width:32px;height:32px;border-radius:50%;" +
+      "background:var(--contribly-bg);opacity:.9;border:0.5px solid var(--contribly-border);display:flex;align-items:center;" +
+      "justify-content:center;color:var(--contribly-ink);z-index:2;}" +
+      ".contribly-carousel__arrow svg{width:18px;height:18px;}" +
+      ".contribly-carousel__arrow--prev{left:8px;}" +
+      ".contribly-carousel__arrow--next{right:8px;}" +
+      ".contribly-carousel__content{padding:14px 16px 16px;}" +
+      ".contribly-carousel__headline{font-weight:600;font-size:14px;margin:0 0 6px;color:var(--contribly-ink);}" +
+      ".contribly-carousel__text{font-size:14px;line-height:1.6;margin:0 0 12px;color:var(--contribly-ink);}" +
+      ".contribly-carousel__content > .contribly-carousel__text:last-child{margin-bottom:0;}" +
+      ".contribly-carousel__response{background:var(--contribly-accent-tint);border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;}" +
+      ".contribly-carousel__response svg{width:20px;height:20px;flex-shrink:0;margin-top:1px;color:var(--contribly-accent);}" +
+      ".contribly-carousel__response-body{font-size:13px;line-height:1.6;color:var(--contribly-ink);white-space:pre-line;}" +
+      ".contribly-carousel__response-body p{margin:0 0 8px;}" +
+      ".contribly-carousel__response-body p:last-child{margin-bottom:0;}" +
+      ".contribly-carousel__response-body a{color:var(--contribly-accent);text-decoration:underline;}" +
+      ".contribly-carousel__sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}" +
+      ".contribly-carousel__dots{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:12px;}" +
+      ".contribly-carousel__dot{width:6px;height:6px;border-radius:50%;background:var(--contribly-border);flex-shrink:0;}" +
+      ".contribly-carousel__dot--active{width:16px;height:6px;border-radius:3px;background:var(--contribly-border);overflow:hidden;position:relative;}" +
+      ".contribly-carousel__dot--active .fill{position:absolute;left:0;top:0;bottom:0;width:0%;background:var(--contribly-accent);}" +
+      ".contribly-carousel__dot--active .fill.running{animation-name:contribly-carousel-fill;animation-timing-function:linear;animation-fill-mode:forwards;}" +
+      ".contribly-carousel__dot--active .fill.held{animation-play-state:paused;}" +
+      "@keyframes contribly-carousel-fill{from{width:0%}to{width:100%}}";
+    document.head.appendChild(style);
+  }
+
+  var domPurifyCallbacks = [];
+  var domPurifyLoading = false;
+  var domPurifyHookAdded = false;
+
+  function ensureDOMPurify(callback) {
+    if (window.DOMPurify) { addSafeLinkHookOnce(); callback(); return; }
+    domPurifyCallbacks.push(callback);
+    if (domPurifyLoading) return;
+    domPurifyLoading = true;
+    var script = document.createElement("script");
+    script.src = DOMPURIFY_SRC;
+    script.onload = function () {
+      addSafeLinkHookOnce();
+      domPurifyCallbacks.forEach(function (cb) { cb(); });
+      domPurifyCallbacks = [];
+    };
+    script.onerror = function () {
+      domPurifyCallbacks.forEach(function (cb) { cb(); });
+      domPurifyCallbacks = [];
+    };
+    document.head.appendChild(script);
+  }
+
+  function addSafeLinkHookOnce() {
+    if (domPurifyHookAdded || !window.DOMPurify) return;
+    domPurifyHookAdded = true;
+    window.DOMPurify.addHook("afterSanitizeAttributes", function (node) {
+      if (node.tagName === "A") { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+    });
+  }
+
+  function sanitiseResponseHtml(rawText) {
+    if (window.DOMPurify) {
+      return window.DOMPurify.sanitize(rawText, {
+        ALLOWED_TAGS: ["a", "b", "strong", "i", "em", "u", "br", "p"],
+        ALLOWED_ATTR: ["href", "target", "rel"],
+      });
+    }
+    return escapeHtml(rawText);
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function formatDate(isoString, lang) {
+    try {
+      var d = new Date(isoString);
+      return d.toLocaleDateString(lang || DEFAULT_LANGUAGE, { day: "numeric", month: "short" });
+    } catch (e) { return ""; }
+  }
+
+  function getInitials(name) {
+    if (!name) return "?";
+    var parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  function pickArtifactByType(artifacts, contentTypePrefix, preferredLabels) {
+    var candidates = artifacts.filter(function (a) { return a.url && a.contentType && a.contentType.indexOf(contentTypePrefix) === 0; });
+    if (!candidates.length) return null;
+    for (var i = 0; i < preferredLabels.length; i++) {
+      var match = candidates.filter(function (a) { return a.label === preferredLabels[i]; })[0];
+      if (match) return match;
+    }
+    return candidates[0];
+  }
+
+  function pickMedia(mediaUsages) {
+    if (!mediaUsages || !mediaUsages.length) return null;
+    var usage = mediaUsages[0];
+    var media = usage.media;
+    var artifacts = usage.artifacts;
+    if (!artifacts || !artifacts.length) return null;
+    if (media && media.type === "video") {
+      var video = pickArtifactByType(artifacts, "video/", ["HD", "nHD"]);
+      if (!video) return null;
+      var poster = pickArtifactByType(artifacts, "image/", ["HD", "mediumlandscape", "large", "medium"]);
+      return { kind: "video", videoUrl: video.url, videoContentType: video.contentType, width: video.width, height: video.height, posterUrl: poster ? poster.url : null };
+    }
+    var image = pickArtifactByType(artifacts, "image/", ["large", "mediumlandscapecropdouble", "extralarge", "medium"]);
+    if (!image) return null;
+    return { kind: "image", imageUrl: image.url, width: image.width, height: image.height };
+  }
+
+  // ---- Per-widget instance ----
+
+  function createInstance(root) {
+    return {
+      root: root,
+      assignmentId: root.getAttribute("data-assignment"),
+      lang: root.getAttribute("data-language") || DEFAULT_LANGUAGE,
+      items: [],
+      total: null,
+      nextPage: 1,
+      pageSize: 10,
+      allLoaded: false,
+      loadingPage: false,
+      currentIndex: 0,
+      dwellTimeoutId: null,
+      resumeTimeoutId: null,
+      slideStartedAt: null,
+      pausedRemainingMs: null,
+      isHeld: false,
+      currentVideoEl: null,
+      stageEl: null,
+    };
+  }
+
+  function apiUrl(inst, page) {
+    return "https://api.contribly.com/1/contributions?assignment=" + encodeURIComponent(inst.assignmentId) +
+      "&page=" + page + "&pageSize=" + inst.pageSize;
+  }
+
+  function fetchTotalCount(inst) {
+    return fetch(apiUrl(inst, 1), { method: "HEAD" })
+      .then(function (res) {
+        var count = res.headers.get("X-Total-Count");
+        inst.total = count ? parseInt(count, 10) : null;
+      })
+      .catch(function () { inst.total = null; });
+  }
+
+  function fetchPage(inst, page) {
+    if (inst.loadingPage || inst.allLoaded) return Promise.resolve();
+    inst.loadingPage = true;
+    return fetch(apiUrl(inst, page))
+      .then(function (res) { if (!res.ok) throw new Error("Request failed"); return res.json(); })
+      .then(function (data) {
+        var list = data.contributions || data || [];
+        inst.items = inst.items.concat(list);
+        inst.nextPage = page + 1;
+        if (list.length < inst.pageSize) inst.allLoaded = true;
+      })
+      .finally(function () { inst.loadingPage = false; });
+  }
+
+  function maybePrefetch(inst) {
+    // Fetch the next page once we're within 2 items of the end of what's loaded.
+    if (!inst.allLoaded && inst.currentIndex >= inst.items.length - 2) {
+      fetchPage(inst, inst.nextPage);
+    }
+  }
+
+  function clearTimers(inst) {
+    if (inst.dwellTimeoutId) { clearTimeout(inst.dwellTimeoutId); inst.dwellTimeoutId = null; }
+    if (inst.resumeTimeoutId) { clearTimeout(inst.resumeTimeoutId); inst.resumeTimeoutId = null; }
+  }
+
+  function goToIndex(inst, index, direction) {
+    clearTimers(inst);
+    if (inst.currentVideoEl) { inst.currentVideoEl.pause(); inst.currentVideoEl = null; }
+    var len = inst.items.length;
+    if (len === 0) return;
+    var newIndex = index;
+    if (newIndex >= len) {
+      // Loop back to the start once we know we've loaded everything;
+      // otherwise wait for more pages before wrapping.
+      newIndex = inst.allLoaded ? 0 : len - 1;
+    }
+    if (newIndex < 0) newIndex = inst.allLoaded ? len - 1 : 0;
+    inst.currentIndex = newIndex;
+    renderSlide(inst);
+    maybePrefetch(inst);
+  }
+
+  function advance(inst) { goToIndex(inst, inst.currentIndex + 1, 1); }
+
+  function renderDots(inst) {
+    var total = inst.total;
+    var wrap = document.createElement("div");
+    wrap.className = "contribly-carousel__dots";
+    if (!total || total <= 1) return wrap;
+    var count = Math.min(total, MAX_VISIBLE_DOTS);
+    var start = Math.max(0, Math.min(inst.currentIndex - Math.floor(count / 2), total - count));
+    for (var i = 0; i < count; i++) {
+      var itemIndex = start + i;
+      var dot = document.createElement("span");
+      if (itemIndex === inst.currentIndex) {
+        dot.className = "contribly-carousel__dot contribly-carousel__dot--active";
+        var fill = document.createElement("span");
+        fill.className = "fill";
+        dot.appendChild(fill);
+        inst.activeDotFillEl = fill;
+      } else {
+        dot.className = "contribly-carousel__dot";
+      }
+      wrap.appendChild(dot);
+    }
+    return wrap;
+  }
+
+  function startDotFill(inst, durationMs) {
+    if (!inst.activeDotFillEl) return;
+    var fill = inst.activeDotFillEl;
+    fill.style.animationDuration = durationMs + "ms";
+    // Force reflow so the animation restarts cleanly for the new slide.
+    fill.classList.remove("running");
+    void fill.offsetWidth;
+    fill.classList.add("running");
+  }
+
+  function setDotFillHeld(inst, held) {
+    if (!inst.activeDotFillEl) return;
+    inst.activeDotFillEl.classList.toggle("held", held);
+  }
+
+  function scheduleDwell(inst, ms) {
+    inst.slideStartedAt = Date.now();
+    inst.dwellTimeoutId = setTimeout(function () { advance(inst); }, ms);
+  }
+
+  function onHoldStart(inst) {
+    if (inst.isHeld) return;
+    inst.isHeld = true;
+    setDotFillHeld(inst, true);
+    if (inst.currentVideoEl) {
+      inst.currentVideoEl.pause();
+    } else if (inst.dwellTimeoutId) {
+      var elapsed = Date.now() - inst.slideStartedAt;
+      inst.pausedRemainingMs = Math.max(0, DWELL_MS - elapsed);
+      clearTimeout(inst.dwellTimeoutId);
+      inst.dwellTimeoutId = null;
+    }
+    if (inst.resumeTimeoutId) { clearTimeout(inst.resumeTimeoutId); inst.resumeTimeoutId = null; }
+  }
+
+  function onHoldEnd(inst) {
+    if (!inst.isHeld) return;
+    inst.isHeld = false;
+    // Grace period: wait a bit longer before actually resuming, so letting
+    // go doesn't feel like it instantly snatches the content away.
+    inst.resumeTimeoutId = setTimeout(function () {
+      setDotFillHeld(inst, false);
+      if (inst.currentVideoEl) {
+        inst.currentVideoEl.play().catch(function () {});
+      } else {
+        scheduleDwell(inst, inst.pausedRemainingMs != null ? inst.pausedRemainingMs : DWELL_MS);
+      }
+    }, HOLD_RELEASE_GRACE_MS);
+  }
+
+  var SWIPE_THRESHOLD_PX = 40;
+
+  function attachHoldHandlers(inst, stageEl) {
+    var isControl = function (target) {
+      return !!(target.closest && target.closest(".contribly-carousel__arrow, .contribly-carousel__mute"));
+    };
+    var swipeStart = null;
+
+    stageEl.addEventListener("pointerdown", function (e) {
+      if (isControl(e.target)) return;
+      swipeStart = { x: e.clientX, y: e.clientY };
+      onHoldStart(inst);
+    });
+
+    stageEl.addEventListener("pointerup", function (e) {
+      if (isControl(e.target)) return;
+      var wasSwipe = false;
+      if (swipeStart) {
+        var dx = e.clientX - swipeStart.x;
+        var dy = e.clientY - swipeStart.y;
+        if (Math.abs(dx) >= SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy)) {
+          wasSwipe = true;
+          inst.isHeld = false; // a deliberate swipe skips the hold-release grace pause
+          if (inst.resumeTimeoutId) { clearTimeout(inst.resumeTimeoutId); inst.resumeTimeoutId = null; }
+          // Swipe left reveals the next card (like turning a page); swipe right goes back.
+          goToIndex(inst, inst.currentIndex + (dx < 0 ? 1 : -1), dx < 0 ? 1 : -1);
+        }
+      }
+      swipeStart = null;
+      if (!wasSwipe) onHoldEnd(inst);
+    });
+
+    ["pointercancel", "pointerleave"].forEach(function (evt) {
+      stageEl.addEventListener(evt, function (e) {
+        if (isControl(e.target)) return;
+        swipeStart = null;
+        onHoldEnd(inst);
+      });
+    });
+  }
+
+  function renderSlide(inst) {
+    var item = inst.items[inst.currentIndex];
+    if (!item) return;
+
+    var stage = document.createElement("div");
+    stage.className = "contribly-carousel__stage";
+
+    var card = document.createElement("div");
+    card.className = "contribly-carousel__card";
+
+    var html = "";
+    var displayName = item.attribution || "Community contributor";
+    html += '<div class="contribly-carousel__header">';
+    html += '<div class="contribly-carousel__avatar">' + escapeHtml(getInitials(displayName)) + "</div>";
+    html += '<div class="contribly-carousel__identity"><p class="contribly-carousel__name">' + escapeHtml(displayName) + "</p>";
+    var place = item.place;
+    if (place && place.name) {
+      html += '<div class="contribly-carousel__location">' + LOCATION_PIN_SVG + "<span>" + escapeHtml(place.name) + "</span></div>";
+    }
+    html += "</div>";
+    if (item.created) html += '<span class="contribly-carousel__date">' + formatDate(item.created, inst.lang) + "</span>";
+    html += "</div>";
+
+    var mediaInfo = pickMedia(item.mediaUsages);
+    html += '<div class="contribly-carousel__media-wrap">';
+    if (mediaInfo) {
+      var ratioStyle = mediaInfo.width && mediaInfo.height ? ' style="aspect-ratio:' + mediaInfo.width + "/" + mediaInfo.height + ';"' : "";
+      if (mediaInfo.kind === "video") {
+        html += '<video class="contribly-carousel__media" muted playsinline autoplay preload="auto"' + ratioStyle +
+          (mediaInfo.posterUrl ? ' poster="' + mediaInfo.posterUrl + '"' : "") +
+          '><source src="' + mediaInfo.videoUrl + '" type="' + (mediaInfo.videoContentType || "video/mp4") + '"></video>';
+        html += '<button class="contribly-carousel__mute" type="button" aria-label="Toggle sound">' + MUTE_SVG + "</button>";
+      } else {
+        html += '<img class="contribly-carousel__media" src="' + mediaInfo.imageUrl + '" alt=""' + ratioStyle + " />";
+      }
+    }
+    html += "</div>";
+
+    html += '<div class="contribly-carousel__content">';
+    if (item.headline) html += '<p class="contribly-carousel__headline">' + escapeHtml(item.headline) + "</p>";
+    if (item.body) html += '<p class="contribly-carousel__text">' + escapeHtml(item.body) + "</p>";
+    var hasResponse = item.journalistResponse && item.journalistResponse.text;
+    if (hasResponse) {
+      html += '<div class="contribly-carousel__response"><span class="contribly-carousel__sr-only">' +
+        escapeHtml(translate(inst.lang, "newsroomReply")) + "</span>" + REPLY_ICON_SVG +
+        '<div class="contribly-carousel__response-body"></div></div>';
+    }
+    html += "</div>";
+
+    card.innerHTML = html;
+
+    var prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "contribly-carousel__arrow contribly-carousel__arrow--prev";
+    prevBtn.setAttribute("aria-label", translate(inst.lang, "prev"));
+    prevBtn.innerHTML = CHEVRON_LEFT_SVG;
+    prevBtn.addEventListener("click", function () { goToIndex(inst, inst.currentIndex - 1, -1); });
+
+    var nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "contribly-carousel__arrow contribly-carousel__arrow--next";
+    nextBtn.setAttribute("aria-label", translate(inst.lang, "next"));
+    nextBtn.innerHTML = CHEVRON_RIGHT_SVG;
+    nextBtn.addEventListener("click", function () { goToIndex(inst, inst.currentIndex + 1, 1); });
+
+    stage.appendChild(card);
+    stage.appendChild(prevBtn);
+    stage.appendChild(nextBtn);
+
+    inst.root.innerHTML = "";
+    inst.root.appendChild(stage);
+    inst.root.appendChild(renderDots(inst));
+    inst.stageEl = stage;
+    attachHoldHandlers(inst, stage);
+
+    if (hasResponse) {
+      ensureDOMPurify(function () {
+        var bodyEl = card.querySelector(".contribly-carousel__response-body");
+        if (bodyEl) bodyEl.innerHTML = sanitiseResponseHtml(item.journalistResponse.text);
+      });
+    }
+
+    var videoEl = card.querySelector("video");
+    if (videoEl) {
+      inst.currentVideoEl = videoEl;
+      videoEl.addEventListener("ended", function () { advance(inst); });
+      videoEl.addEventListener("loadedmetadata", function () {
+        if (videoEl.duration && isFinite(videoEl.duration)) startDotFill(inst, videoEl.duration * 1000);
+      });
+      var muteBtn = card.querySelector(".contribly-carousel__mute");
+      if (muteBtn) {
+        muteBtn.addEventListener("click", function () {
+          videoEl.muted = !videoEl.muted;
+          muteBtn.innerHTML = videoEl.muted ? MUTE_SVG : UNMUTE_SVG;
+        });
+      }
+      videoEl.play().catch(function () {});
+    } else {
+      startDotFill(inst, DWELL_MS);
+      scheduleDwell(inst, DWELL_MS);
+    }
+  }
+
+  function renderError(inst) {
+    inst.root.innerHTML = '<div class="contribly-carousel__error">' + ALERT_ICON_SVG +
+      '<span class="contribly-carousel__sr-only">' + escapeHtml(translate(inst.lang, "loadError")) + "</span></div>";
+  }
+
+  function initInstance(root) {
+    injectStylesOnce();
+    root.setAttribute("data-contribly-initialised", "true");
+    var inst = createInstance(root);
+    if (!inst.assignmentId) { renderError(inst); return; }
+    root.innerHTML = '<div class="contribly-carousel__loading"></div>';
+
+    Promise.all([fetchTotalCount(inst), fetchPage(inst, 1)])
+      .then(function () {
+        if (!inst.items.length) { renderError(inst); return; }
+        goToIndex(inst, 0);
+      })
+      .catch(function () { renderError(inst); });
+  }
+
+  function init() {
+    var widgets = document.querySelectorAll(".contribly-carousel:not([data-contribly-initialised])");
+    widgets.forEach(initInstance);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();

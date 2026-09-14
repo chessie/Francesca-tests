@@ -47,6 +47,7 @@
   var DWELL_MS = 2500;
   var HOLD_RELEASE_GRACE_MS = 6000;
   var MAX_VISIBLE_DOTS = 8;
+  var FADE_MS = 200;
 
   var LOCATION_PIN_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
@@ -109,7 +110,8 @@
       "--contribly-ink:#f2f1f7;--contribly-muted:#a3a2ad;--contribly-accent:#a5a0fb;--contribly-accent-tint:#2b2757;" +
       "--contribly-shadow:rgba(0,0,0,.35);--contribly-shimmer-a:#2a2a33;--contribly-shimmer-b:#34343f;}}" +
       ".contribly-carousel *{box-sizing:border-box;}" +
-      ".contribly-carousel__stage{position:relative;touch-action:pan-y;}" +
+      ".contribly-carousel__stage{position:relative;touch-action:pan-y;opacity:1;transition:opacity " + FADE_MS + "ms ease;}" +
+      ".contribly-carousel__stage--hidden{opacity:0;}" +
       ".contribly-carousel__card{background:var(--contribly-bg);border-radius:var(--contribly-radius);overflow:hidden;" +
       "border:0.5px solid var(--contribly-border);box-shadow:0 1px 2px var(--contribly-shadow),0 8px 20px var(--contribly-shadow);" +
       "-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}" +
@@ -323,8 +325,21 @@
     }
     if (newIndex < 0) newIndex = inst.allLoaded ? len - 1 : 0;
     inst.currentIndex = newIndex;
-    renderSlide(inst);
-    maybePrefetch(inst);
+
+    var swapIn = function () {
+      renderSlide(inst);
+      maybePrefetch(inst);
+    };
+
+    if (inst.stageEl) {
+      // Fade the outgoing card out, then build the new one. The new card
+      // fades itself in on insertion (see renderSlide), so this reads as
+      // one continuous cross-fade rather than two separate animations.
+      inst.stageEl.classList.add("contribly-carousel__stage--hidden");
+      setTimeout(swapIn, FADE_MS);
+    } else {
+      swapIn();
+    }
   }
 
   function advance(inst) { goToIndex(inst, inst.currentIndex + 1, 1); }
@@ -513,11 +528,21 @@
     stage.appendChild(prevBtn);
     stage.appendChild(nextBtn);
 
+    // Start hidden with transitions off, insert, force a reflow, then turn
+    // transitions back on and reveal, this is what makes the browser
+    // actually animate the fade-in rather than just snapping to visible.
+    stage.classList.add("contribly-carousel__stage--hidden");
+    stage.style.transition = "none";
+
     inst.root.innerHTML = "";
     inst.root.appendChild(stage);
     inst.root.appendChild(renderDots(inst));
     inst.stageEl = stage;
     attachHoldHandlers(inst, stage);
+
+    void stage.offsetWidth; // force reflow
+    stage.style.transition = "";
+    stage.classList.remove("contribly-carousel__stage--hidden");
 
     if (hasResponse) {
       ensureDOMPurify(function () {

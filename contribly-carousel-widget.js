@@ -67,6 +67,12 @@
   var ALERT_ICON_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
     '<circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16.01"/></svg>';
+  var HEART_OUTLINE_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
+  var HEART_FILLED_SVG =
+    '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2">' +
+    '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
 
   // Real Contribly wording for "journalist reply", taken from their own
   // gallery widget (contribution.response), not guessed. Used as the hidden
@@ -104,6 +110,7 @@
       ".contribly-carousel{--contribly-bg:#ffffff;--contribly-border:#e9e8f2;--contribly-ink:#17171a;" +
       "--contribly-muted:#6e6e76;--contribly-accent:#4f46e5;--contribly-accent-tint:#eef0ff;" +
       "--contribly-shadow:rgba(20,20,43,.05);--contribly-shimmer-a:#eeedf7;--contribly-shimmer-b:#f7f6fc;" +
+      "--contribly-like-color:#e0245e;" +
       "--contribly-radius:16px;--contribly-font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;" +
       "max-width:400px;width:100%;box-sizing:border-box;font-family:var(--contribly-font);color:var(--contribly-ink);}" +
       "@media (prefers-color-scheme:dark){.contribly-carousel{--contribly-bg:#1c1c22;--contribly-border:#2e2e38;" +
@@ -149,6 +156,13 @@
       ".contribly-carousel__response-body p{margin:0 0 8px;}" +
       ".contribly-carousel__response-body p:last-child{margin-bottom:0;}" +
       ".contribly-carousel__response-body a{color:var(--contribly-accent);text-decoration:underline;}" +
+      ".contribly-carousel__likes{margin-top:12px;}" +
+      ".contribly-carousel__like-btn{background:none;border:none;padding:4px 4px 4px 0;display:flex;align-items:center;" +
+      "gap:6px;color:var(--contribly-muted);cursor:pointer;}" +
+      ".contribly-carousel__like-btn svg{width:20px;height:20px;flex-shrink:0;transition:transform 150ms ease;}" +
+      ".contribly-carousel__like-btn.liked{color:var(--contribly-like-color);}" +
+      ".contribly-carousel__like-btn.liked svg{transform:scale(1.15);}" +
+      ".contribly-carousel__like-count{font-size:13px;}" +
       ".contribly-carousel__sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}" +
       ".contribly-carousel__dots{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:12px;}" +
       ".contribly-carousel__dot{width:6px;height:6px;border-radius:50%;background:var(--contribly-border);flex-shrink:0;}" +
@@ -219,6 +233,26 @@
     var parts = name.trim().split(/\s+/);
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  var LIKED_STORAGE_PREFIX = "contribly-liked-";
+
+  function hasLikedLocally(id) {
+    try { return window.localStorage.getItem(LIKED_STORAGE_PREFIX + id) === "1"; } catch (e) { return false; }
+  }
+
+  function markLikedLocally(id) {
+    try { window.localStorage.setItem(LIKED_STORAGE_PREFIX + id, "1"); } catch (e) { /* private browsing etc: fine to no-op */ }
+  }
+
+  function sendLike(id) {
+    // Mirrors the endpoint Contribly's own gallery widget actually calls in
+    // production (a one-way "add a like", not a toggle). The published API
+    // docs instead describe POST /1/contributions/{id}/like as a like/unlike
+    // toggle. If Contribly confirms that's preferred for custom widgets,
+    // this is the only line that needs to change.
+    fetch("https://api.contribly.com/1/contributions/" + encodeURIComponent(id) + "/widgetlike", { method: "POST" })
+      .catch(function () { /* best-effort: the visible count is already updated locally */ });
   }
 
   function pickArtifactByType(artifacts, contentTypePrefix, preferredLabels) {
@@ -422,7 +456,7 @@
 
   function attachHoldHandlers(inst, stageEl) {
     var isControl = function (target) {
-      return !!(target.closest && target.closest(".contribly-carousel__arrow, .contribly-carousel__mute"));
+      return !!(target.closest && target.closest(".contribly-carousel__arrow, .contribly-carousel__mute, .contribly-carousel__like-btn"));
     };
     var swipeStart = null;
 
@@ -506,6 +540,14 @@
         escapeHtml(translate(inst.lang, "newsroomReply")) + "</span>" + REPLY_ICON_SVG +
         '<div class="contribly-carousel__response-body"></div></div>';
     }
+
+    var likeCount = typeof item.allLikes === "number" ? item.allLikes : 0;
+    var alreadyLiked = hasLikedLocally(item.id);
+    html += '<div class="contribly-carousel__likes">' +
+      '<button type="button" class="contribly-carousel__like-btn' + (alreadyLiked ? " liked" : "") + '" aria-pressed="' + (alreadyLiked ? "true" : "false") + '">' +
+      (alreadyLiked ? HEART_FILLED_SVG : HEART_OUTLINE_SVG) +
+      '<span class="contribly-carousel__like-count">' + likeCount + "</span></button></div>";
+
     html += "</div>";
 
     card.innerHTML = html;
@@ -523,6 +565,18 @@
     nextBtn.setAttribute("aria-label", translate(inst.lang, "next"));
     nextBtn.innerHTML = CHEVRON_RIGHT_SVG;
     nextBtn.addEventListener("click", function () { goToIndex(inst, inst.currentIndex + 1, 1); });
+
+    var likeBtn = card.querySelector(".contribly-carousel__like-btn");
+    if (likeBtn) {
+      likeBtn.addEventListener("click", function () {
+        if (hasLikedLocally(item.id)) return; // one-way, matches Contribly's own widget behaviour
+        markLikedLocally(item.id);
+        likeBtn.classList.add("liked");
+        likeBtn.setAttribute("aria-pressed", "true");
+        likeBtn.innerHTML = HEART_FILLED_SVG + '<span class="contribly-carousel__like-count">' + (likeCount + 1) + "</span>";
+        sendLike(item.id);
+      });
+    }
 
     stage.appendChild(card);
     stage.appendChild(prevBtn);

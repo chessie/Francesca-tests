@@ -73,6 +73,11 @@
   var HEART_FILLED_SVG =
     '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2">' +
     '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
+  var SHARE_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';
+  var CHECK_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
 
   // Real Contribly wording for "journalist reply", taken from their own
   // gallery widget (contribution.response), not guessed. Used as the hidden
@@ -156,12 +161,14 @@
       ".contribly-carousel__response-body p{margin:0 0 8px;}" +
       ".contribly-carousel__response-body p:last-child{margin-bottom:0;}" +
       ".contribly-carousel__response-body a{color:var(--contribly-accent);text-decoration:underline;}" +
-      ".contribly-carousel__likes{margin-top:12px;}" +
-      ".contribly-carousel__like-btn{background:none;border:none;padding:4px 4px 4px 0;display:flex;align-items:center;" +
-      "gap:6px;color:var(--contribly-muted);cursor:pointer;}" +
-      ".contribly-carousel__like-btn svg{width:20px;height:20px;flex-shrink:0;transition:transform 150ms ease;}" +
+      ".contribly-carousel__likes{margin-top:12px;display:flex;align-items:center;justify-content:space-between;}" +
+      ".contribly-carousel__like-btn,.contribly-carousel__share-btn{background:none;border:none;padding:4px;display:flex;" +
+      "align-items:center;gap:6px;color:var(--contribly-muted);cursor:pointer;}" +
+      ".contribly-carousel__like-btn{padding-left:0;}" +
+      ".contribly-carousel__like-btn svg,.contribly-carousel__share-btn svg{width:20px;height:20px;flex-shrink:0;transition:transform 150ms ease;}" +
       ".contribly-carousel__like-btn.liked{color:var(--contribly-like-color);}" +
       ".contribly-carousel__like-btn.liked svg{transform:scale(1.15);}" +
+      ".contribly-carousel__share-btn.copied{color:var(--contribly-accent);}" +
       ".contribly-carousel__like-count{font-size:13px;}" +
       ".contribly-carousel__sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}" +
       ".contribly-carousel__dots{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:12px;}" +
@@ -253,6 +260,36 @@
     // this is the only line that needs to change.
     fetch("https://api.contribly.com/1/contributions/" + encodeURIComponent(id) + "/widgetlike", { method: "POST" })
       .catch(function () { /* best-effort: the visible count is already updated locally */ });
+  }
+
+  function buildShareUrl(id) {
+    try {
+      var url = new URL(window.location.href);
+      url.searchParams.set("contributionID", id);
+      return url.toString();
+    } catch (e) {
+      return window.location.href;
+    }
+  }
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    // Fallback for browsers without the Clipboard API.
+    return new Promise(function (resolve, reject) {
+      try {
+        var textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+        resolve();
+      } catch (e) { reject(e); }
+    });
   }
 
   function pickArtifactByType(artifacts, contentTypePrefix, preferredLabels) {
@@ -456,7 +493,7 @@
 
   function attachHoldHandlers(inst, stageEl) {
     var isControl = function (target) {
-      return !!(target.closest && target.closest(".contribly-carousel__arrow, .contribly-carousel__mute, .contribly-carousel__like-btn"));
+      return !!(target.closest && target.closest(".contribly-carousel__arrow, .contribly-carousel__mute, .contribly-carousel__like-btn, .contribly-carousel__share-btn"));
     };
     var swipeStart = null;
 
@@ -546,7 +583,9 @@
     html += '<div class="contribly-carousel__likes">' +
       '<button type="button" class="contribly-carousel__like-btn' + (alreadyLiked ? " liked" : "") + '" aria-pressed="' + (alreadyLiked ? "true" : "false") + '">' +
       (alreadyLiked ? HEART_FILLED_SVG : HEART_OUTLINE_SVG) +
-      '<span class="contribly-carousel__like-count">' + likeCount + "</span></button></div>";
+      '<span class="contribly-carousel__like-count">' + likeCount + "</span></button>" +
+      '<button type="button" class="contribly-carousel__share-btn" aria-label="Share">' + SHARE_SVG + "</button>" +
+      "</div>";
 
     html += "</div>";
 
@@ -575,6 +614,28 @@
         likeBtn.setAttribute("aria-pressed", "true");
         likeBtn.innerHTML = HEART_FILLED_SVG + '<span class="contribly-carousel__like-count">' + (likeCount + 1) + "</span>";
         sendLike(item.id);
+      });
+    }
+
+    var shareBtn = card.querySelector(".contribly-carousel__share-btn");
+    if (shareBtn) {
+      shareBtn.addEventListener("click", function () {
+        var url = buildShareUrl(item.id);
+        if (navigator.share) {
+          navigator.share({ url: url, title: item.headline || undefined, text: item.body || undefined }).catch(function () {
+            // Cancelled or unsupported combination of fields, no action needed.
+          });
+          return;
+        }
+        copyToClipboard(url).then(function () {
+          var original = shareBtn.innerHTML;
+          shareBtn.innerHTML = CHECK_SVG;
+          shareBtn.classList.add("copied");
+          setTimeout(function () {
+            shareBtn.innerHTML = original;
+            shareBtn.classList.remove("copied");
+          }, 1500);
+        });
       });
     }
 
@@ -631,6 +692,39 @@
       '<span class="contribly-carousel__sr-only">' + escapeHtml(translate(inst.lang, "loadError")) + "</span></div>";
   }
 
+  var MAX_DEEP_LINK_PAGES = 20; // safety cap so a missing/old ID can't trigger unbounded fetching
+
+  function getSharedContributionId() {
+    try {
+      return new URLSearchParams(window.location.search).get("contributionID");
+    } catch (e) { return null; }
+  }
+
+  function clearSharedContributionIdFromUrl() {
+    try {
+      var url = new URL(window.location.href);
+      url.searchParams.delete("contributionID");
+      window.history.replaceState({}, document.title, url.toString());
+    } catch (e) { /* non-fatal: URL just keeps the param */ }
+  }
+
+  function findIndexById(inst, id) {
+    for (var i = 0; i < inst.items.length; i++) {
+      if (inst.items[i].id === id) return i;
+    }
+    return -1;
+  }
+
+  function resolveStartIndex(inst, targetId) {
+    if (!targetId) return Promise.resolve(0);
+    var foundIndex = findIndexById(inst, targetId);
+    if (foundIndex !== -1) return Promise.resolve(foundIndex);
+    if (inst.allLoaded || inst.nextPage > MAX_DEEP_LINK_PAGES) return Promise.resolve(0);
+    return fetchPage(inst, inst.nextPage).then(function () {
+      return resolveStartIndex(inst, targetId);
+    });
+  }
+
   function initInstance(root) {
     injectStylesOnce();
     root.setAttribute("data-contribly-initialised", "true");
@@ -638,10 +732,14 @@
     if (!inst.assignmentId) { renderError(inst); return; }
     root.innerHTML = '<div class="contribly-carousel__loading"></div>';
 
+    var sharedId = getSharedContributionId();
+
     Promise.all([fetchTotalCount(inst), fetchPage(inst, 1)])
-      .then(function () {
+      .then(function () { return resolveStartIndex(inst, sharedId); })
+      .then(function (startIndex) {
         if (!inst.items.length) { renderError(inst); return; }
-        goToIndex(inst, 0);
+        if (sharedId) clearSharedContributionIdFromUrl();
+        goToIndex(inst, startIndex);
       })
       .catch(function () { renderError(inst); });
   }

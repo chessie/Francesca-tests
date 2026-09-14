@@ -144,7 +144,8 @@
       "--contribly-shadow:rgba(20,20,43,.05);--contribly-shimmer-a:#eeedf7;--contribly-shimmer-b:#f7f6fc;" +
       "--contribly-like-color:#e0245e;" +
       "--contribly-radius:16px;--contribly-font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;" +
-      "max-width:400px;width:100%;box-sizing:border-box;font-family:var(--contribly-font);color:var(--contribly-ink);}" +
+      "max-width:560px;width:100%;box-sizing:border-box;font-family:var(--contribly-font);color:var(--contribly-ink);" +
+      "container-type:inline-size;container-name:contribly-carousel;}" +
       "@media (prefers-color-scheme:dark){.contribly-carousel{--contribly-bg:#1c1c22;--contribly-border:#2e2e38;" +
       "--contribly-ink:#f2f1f7;--contribly-muted:#a3a2ad;--contribly-accent:#a5a0fb;--contribly-accent-tint:#2b2757;" +
       "--contribly-shadow:rgba(0,0,0,.35);--contribly-shimmer-a:#2a2a33;--contribly-shimmer-b:#34343f;}}" +
@@ -211,7 +212,35 @@
       ".contribly-carousel__dot--active .fill{position:absolute;left:0;top:0;bottom:0;width:0%;background:var(--contribly-accent);}" +
       ".contribly-carousel__dot--active .fill.running{animation-name:contribly-carousel-fill;animation-timing-function:linear;animation-fill-mode:forwards;}" +
       ".contribly-carousel__dot--active .fill.held{animation-play-state:paused;}" +
-      "@keyframes contribly-carousel-fill{from{width:0%}to{width:100%}}";
+      "@keyframes contribly-carousel-fill{from{width:0%}to{width:100%}}" +
+      // Scaled-up styles for when the widget's own container has real room
+      // (e.g. a main article column on desktop), not based on screen size,
+      // a widget placed in a narrow sidebar on a wide desktop screen should
+      // still stay compact.
+      "@container contribly-carousel (min-width: 440px){" +
+      ".contribly-carousel__header{padding:18px 22px;gap:12px;}" +
+      ".contribly-carousel__avatar{width:44px;height:44px;font-size:15px;}" +
+      ".contribly-carousel__name{font-size:16px;}" +
+      ".contribly-carousel__location,.contribly-carousel__date{font-size:13px;}" +
+      ".contribly-carousel__content{padding:18px 22px 22px;}" +
+      ".contribly-carousel__headline{font-size:17px;margin-bottom:8px;}" +
+      ".contribly-carousel__text{font-size:16px;margin-bottom:16px;}" +
+      ".contribly-carousel__response{padding:14px 16px;gap:12px;margin-bottom:16px;}" +
+      ".contribly-carousel__response svg{width:22px;height:22px;}" +
+      ".contribly-carousel__response-body{font-size:14.5px;}" +
+      ".contribly-carousel__arrow{width:40px;height:40px;}" +
+      ".contribly-carousel__arrow svg{width:20px;height:20px;}" +
+      ".contribly-carousel__arrow--prev{left:14px;}" +
+      ".contribly-carousel__arrow--next{right:14px;}" +
+      ".contribly-carousel__mute,.contribly-carousel__fullscreen{width:38px;height:38px;bottom:14px;}" +
+      ".contribly-carousel__mute svg,.contribly-carousel__fullscreen svg{width:18px;height:18px;}" +
+      ".contribly-carousel__mute{right:14px;}.contribly-carousel__fullscreen{left:14px;}" +
+      ".contribly-carousel__like-btn svg,.contribly-carousel__share-btn svg{width:23px;height:23px;}" +
+      ".contribly-carousel__like-count{font-size:14px;}" +
+      ".contribly-carousel__dot{width:7px;height:7px;}" +
+      ".contribly-carousel__dot--active{width:20px;height:7px;}" +
+      ".contribly-carousel__dots{gap:8px;margin-top:16px;}" +
+      "}";
     document.head.appendChild(style);
   }
 

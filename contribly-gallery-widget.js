@@ -18,16 +18,16 @@
       remembered per-visitor in localStorage so the button disables after use.
     - Share: native OS share sheet where available, Facebook/Twitter(X)/copy
       link fallback otherwise.
-    - Deep-linking via a ?contributionID= URL parameter, using the same
-      /contributions/{id}/assignment/{id}/page endpoint the original widget
-      calls to find which page a specific contribution lives on.
+    - Deep-linking via a ?contributionID= URL parameter.
     - Read-more truncation on long text.
     - Journalist replies, with icon + timestamp.
     - Google Analytics event names and payload shape (contribly_gallery_*
       via gtag, plus the matching window.dataLayer pushes), kept identical
       to the original on purpose, for continuity with existing dashboards.
     - data-language attribute for translated UI labels (11 languages,
-      Contribly's own real wording, not machine-translated guesses).
+      Contribly's own real wording where it exists; "Show less" and the
+      "Shared" badge are our own wording, since neither existed in the
+      original widget to decode).
 
   CHANGED FROM THE ORIGINAL, DELIBERATELY:
     - No jQuery, no Fancybox. Both are replaced with plain JS and a small
@@ -53,18 +53,36 @@
     - Clipboard copy uses navigator.clipboard.writeText first, falling back
       to the older document.execCommand only if that API isn't available.
     - Added: skeleton loading state, dark mode support, lazy-loaded images,
-      and a container-query based responsive grid (reflows based on the
-      widget's own rendered width, correct whether it's embedded in a full
-      page or a narrow article column, not just screen size).
+      and a fluid grid (repeat(auto-fit, minmax(250px,1fr))) that reflows
+      continuously with the widget's own width rather than jumping at fixed
+      breakpoints.
+    - Below ~532px wide, media shows at its natural shape instead of being
+      forced into a cropped box, matching the old widget's own approach and
+      avoiding a cropping bug that only showed up on real mobile Safari.
     - "Powered by Contribly" is now a small plain text link to
       contribly.com (opens in a new tab) for every embed, replacing the
       original's whitelabel-client allowlist logic.
-
-  ONE THING NOT INDEPENDENTLY VERIFIED:
-    The deep-link endpoint (/contributions/{id}/assignment/{id}/page) is
-    used here because it's what the original widget calls, but we haven't
-    tested it ourselves against live data. Worth confirming it behaves as
-    expected before relying on it in production.
+    - Deep-linking now fetches the shared contribution directly (the same
+      well-tested single-contribution endpoint used throughout this
+      project) and pins it at the top of the grid, rather than relying on
+      the original widget's own "which page is this on" endpoint, which
+      real-world testing showed doesn't reliably land on the right item.
+    - Text stays selectable and readable in dark mode: colour is now set
+      explicitly on every text element instead of only at the container
+      level, since an inherited colour loses to any direct rule the host
+      page happens to have on plain paragraphs.
+    - "Read more" now actually toggles back to "Show less" and re-collapses
+      the card, instead of only expanding once with no way back.
+    - Several speed changes: the assignment/tags lookup, the contributions
+      fetch, and (when present) the shared-contribution fetch all fire at
+      once instead of waiting on each other in sequence; a full batch of
+      cards is built off-screen and inserted into the page in one go
+      instead of one at a time; the "does this text need a Read more
+      button" check now reads every card's height first and only then
+      writes any buttons, instead of alternating read/write per card;
+      images carry real width/height attributes; and an early preconnect
+      hint tells the browser to start opening the connection to
+      Contribly's API before the first request actually needs it.
 
   FIELD NOTES (same as the other widgets in this project):
     contributor name -> attribution, location -> place.name, journalist
@@ -83,17 +101,17 @@
 
   // ---- Real Contribly wording, decoded from their own gallery widget ----
   var TRANSLATIONS = {
-    "en-gb": { readMore: "Read more", response: "Response", filterAll: "All", filterMostLiked: "Most liked", filterMostRecent: "Most recent", contributions: "contributions", loadMore: "Load more", shareCopied: "Copied", shareLabel: "Share", likeLabel: "Like", noContributions: "No contributions yet.", loadError: "This gallery couldn't be loaded." },
-    "en-us": { readMore: "Read more", response: "Response", filterAll: "All", filterMostLiked: "Most liked", filterMostRecent: "Most recent", contributions: "contributions", loadMore: "Load more", shareCopied: "Copied", shareLabel: "Share", likeLabel: "Like", noContributions: "No contributions yet.", loadError: "This gallery couldn't be loaded." },
-    "en-ie": { readMore: "Read more", response: "Response", filterAll: "All", filterMostLiked: "Most liked", filterMostRecent: "Most recent", contributions: "contributions", loadMore: "Load more", shareCopied: "Copied", shareLabel: "Share", likeLabel: "Like", noContributions: "No contributions yet.", loadError: "This gallery couldn't be loaded." },
-    "fr-fr": { readMore: "Lire la suite", response: "R\u00e9ponse", filterAll: "Tout", filterMostLiked: "Les plus lik\u00e9es", filterMostRecent: "Le plus r\u00e9cent", contributions: "contributions", loadMore: "Charger plus", shareCopied: "Copi\u00e9", shareLabel: "Partager", likeLabel: "Aimer", noContributions: "Pas encore de contributions.", loadError: "Cette galerie n'a pas pu \u00eatre charg\u00e9e." },
-    "nl-nl": { readMore: "Lees meer", response: "Reactie", filterAll: "Alle", filterMostLiked: "Populairst", filterMostRecent: "Nieuwste", contributions: "inzendingen", loadMore: "Meer laden", shareCopied: "Gekopieerd", shareLabel: "Delen", likeLabel: "Vind ik leuk", noContributions: "Nog geen inzendingen.", loadError: "Deze galerij kon niet worden geladen." },
-    "nl-be": { readMore: "Lees meer", response: "Reactie", filterAll: "Alle", filterMostLiked: "Meest leuk gevonden", filterMostRecent: "Meest recente", contributions: "inzendingen", loadMore: "Meer laden", shareCopied: "Gekopieerd", shareLabel: "Delen", likeLabel: "Vind ik leuk", noContributions: "Nog geen inzendingen.", loadError: "Deze galerij kon niet worden geladen." },
-    "es-es": { readMore: "Leer m\u00e1s", response: "Respuesta", filterAll: "Todos", filterMostLiked: "M\u00e1s votados", filterMostRecent: "M\u00e1s recientes", contributions: "contribuciones", loadMore: "Cargar m\u00e1s", shareCopied: "Copiado", shareLabel: "Compartir", likeLabel: "Me gusta", noContributions: "A\u00fan no hay contribuciones.", loadError: "No se pudo cargar esta galer\u00eda." },
-    "de-de": { readMore: "Mehr lesen", response: "Antwort", filterAll: "Alle", filterMostLiked: "Am beliebtesten", filterMostRecent: "Neueste", contributions: "Beitr\u00e4ge", loadMore: "Mehr laden", shareCopied: "Kopiert", shareLabel: "Teilen", likeLabel: "Gef\u00e4llt mir", noContributions: "Noch keine Beitr\u00e4ge.", loadError: "Diese Galerie konnte nicht geladen werden." },
-    "fi-fi": { readMore: "Lue lis\u00e4\u00e4", response: "Vastaus", filterAll: "Kaikki", filterMostLiked: "Eniten tyk\u00e4tty", filterMostRecent: "Uusin", contributions: "Julkaisut", loadMore: "Lataa lis\u00e4\u00e4", shareCopied: "Kopioitu", shareLabel: "Jaa", likeLabel: "Tyk\u00e4\u00e4", noContributions: "Ei viel\u00e4 julkaisuja.", loadError: "T\u00e4t\u00e4 galleriaa ei voitu ladata." },
-    "hr-hr": { readMore: "Pro\u010ditajte vi\u0161e", response: "Odgovor", filterAll: "Sve", filterMostLiked: "Najsvi\u0111anije", filterMostRecent: "Najnovije", contributions: "Doprinosi", loadMore: "U\u010ditaj vi\u0161e", shareCopied: "Kopirano", shareLabel: "Udio", likeLabel: "Sviđa mi se", noContributions: "Jo\u0161 nema doprinosa.", loadError: "Ova galerija se nije mogla u\u010ditati." },
-    "ro-ro": { readMore: "Cite\u0219te mai mult", response: "R\u0103spuns", filterAll: "Toate", filterMostLiked: "Cele mai apreciate", filterMostRecent: "Cel mai recent", contributions: "Contribu\u021bii", loadMore: "\u00cencarc\u0103 mai multe", shareCopied: "Copiat", shareLabel: "Distribuie", likeLabel: "Apreciaz\u0103", noContributions: "\u00cenc\u0103 nu exist\u0103 contribu\u021bii.", loadError: "Aceast\u0103 galerie nu a putut fi \u00eenc\u0103rcat\u0103." }
+    "en-gb": { readMore: "Read more", showLess: "Show less", sharedBadge: "Shared", response: "Response", filterAll: "All", filterMostLiked: "Most liked", filterMostRecent: "Most recent", contributions: "contributions", loadMore: "Load more", shareCopied: "Copied", shareLabel: "Share", likeLabel: "Like", noContributions: "No contributions yet.", loadError: "This gallery couldn't be loaded." },
+    "en-us": { readMore: "Read more", showLess: "Show less", sharedBadge: "Shared", response: "Response", filterAll: "All", filterMostLiked: "Most liked", filterMostRecent: "Most recent", contributions: "contributions", loadMore: "Load more", shareCopied: "Copied", shareLabel: "Share", likeLabel: "Like", noContributions: "No contributions yet.", loadError: "This gallery couldn't be loaded." },
+    "en-ie": { readMore: "Read more", showLess: "Show less", sharedBadge: "Shared", response: "Response", filterAll: "All", filterMostLiked: "Most liked", filterMostRecent: "Most recent", contributions: "contributions", loadMore: "Load more", shareCopied: "Copied", shareLabel: "Share", likeLabel: "Like", noContributions: "No contributions yet.", loadError: "This gallery couldn't be loaded." },
+    "fr-fr": { readMore: "Lire la suite", showLess: "Voir moins", sharedBadge: "Partagé", response: "R\u00e9ponse", filterAll: "Tout", filterMostLiked: "Les plus lik\u00e9es", filterMostRecent: "Le plus r\u00e9cent", contributions: "contributions", loadMore: "Charger plus", shareCopied: "Copi\u00e9", shareLabel: "Partager", likeLabel: "Aimer", noContributions: "Pas encore de contributions.", loadError: "Cette galerie n'a pas pu \u00eatre charg\u00e9e." },
+    "nl-nl": { readMore: "Lees meer", showLess: "Minder tonen", sharedBadge: "Gedeeld", response: "Reactie", filterAll: "Alle", filterMostLiked: "Populairst", filterMostRecent: "Nieuwste", contributions: "inzendingen", loadMore: "Meer laden", shareCopied: "Gekopieerd", shareLabel: "Delen", likeLabel: "Vind ik leuk", noContributions: "Nog geen inzendingen.", loadError: "Deze galerij kon niet worden geladen." },
+    "nl-be": { readMore: "Lees meer", showLess: "Minder tonen", sharedBadge: "Gedeeld", response: "Reactie", filterAll: "Alle", filterMostLiked: "Meest leuk gevonden", filterMostRecent: "Meest recente", contributions: "inzendingen", loadMore: "Meer laden", shareCopied: "Gekopieerd", shareLabel: "Delen", likeLabel: "Vind ik leuk", noContributions: "Nog geen inzendingen.", loadError: "Deze galerij kon niet worden geladen." },
+    "es-es": { readMore: "Leer m\u00e1s", showLess: "Ver menos", sharedBadge: "Compartido", response: "Respuesta", filterAll: "Todos", filterMostLiked: "M\u00e1s votados", filterMostRecent: "M\u00e1s recientes", contributions: "contribuciones", loadMore: "Cargar m\u00e1s", shareCopied: "Copiado", shareLabel: "Compartir", likeLabel: "Me gusta", noContributions: "A\u00fan no hay contribuciones.", loadError: "No se pudo cargar esta galer\u00eda." },
+    "de-de": { readMore: "Mehr lesen", showLess: "Weniger anzeigen", sharedBadge: "Geteilt", response: "Antwort", filterAll: "Alle", filterMostLiked: "Am beliebtesten", filterMostRecent: "Neueste", contributions: "Beitr\u00e4ge", loadMore: "Mehr laden", shareCopied: "Kopiert", shareLabel: "Teilen", likeLabel: "Gef\u00e4llt mir", noContributions: "Noch keine Beitr\u00e4ge.", loadError: "Diese Galerie konnte nicht geladen werden." },
+    "fi-fi": { readMore: "Lue lis\u00e4\u00e4", showLess: "Näytä vähemmän", sharedBadge: "Jaettu", response: "Vastaus", filterAll: "Kaikki", filterMostLiked: "Eniten tyk\u00e4tty", filterMostRecent: "Uusin", contributions: "Julkaisut", loadMore: "Lataa lis\u00e4\u00e4", shareCopied: "Kopioitu", shareLabel: "Jaa", likeLabel: "Tyk\u00e4\u00e4", noContributions: "Ei viel\u00e4 julkaisuja.", loadError: "T\u00e4t\u00e4 galleriaa ei voitu ladata." },
+    "hr-hr": { readMore: "Pro\u010ditajte vi\u0161e", showLess: "Prikaži manje", sharedBadge: "Podijeljeno", response: "Odgovor", filterAll: "Sve", filterMostLiked: "Najsvi\u0111anije", filterMostRecent: "Najnovije", contributions: "Doprinosi", loadMore: "U\u010ditaj vi\u0161e", shareCopied: "Kopirano", shareLabel: "Udio", likeLabel: "Sviđa mi se", noContributions: "Jo\u0161 nema doprinosa.", loadError: "Ova galerija se nije mogla u\u010ditati." },
+    "ro-ro": { readMore: "Cite\u0219te mai mult", showLess: "Arată mai puțin", sharedBadge: "Distribuit", response: "R\u0103spuns", filterAll: "Toate", filterMostLiked: "Cele mai apreciate", filterMostRecent: "Cel mai recent", contributions: "Contribu\u021bii", loadMore: "\u00cencarc\u0103 mai multe", shareCopied: "Copiat", shareLabel: "Distribuie", likeLabel: "Apreciaz\u0103", noContributions: "\u00cenc\u0103 nu exist\u0103 contribu\u021bii.", loadError: "Aceast\u0103 galerie nu a putut fi \u00eenc\u0103rcat\u0103." }
   };
   var DEFAULT_LANGUAGE = "en-gb";
 
@@ -132,7 +150,9 @@
       "--cg-muted:#a3a2ad;--cg-accent:#a5a0fb;--cg-accent-tint:#2b2757;--cg-shadow:rgba(0,0,0,.4);--cg-shimmer-a:#2a2a33;--cg-shimmer-b:#34343f;}}" +
       ".contribly-gallery *{box-sizing:border-box;}" +
       ".cg-head{margin-bottom:16px;}" +
-      ".cg-title{font-size:20px;font-weight:700;margin:0 0 4px;}" +
+      ".cg-title{font-size:20px;font-weight:700;margin:0 0 4px;color:var(--cg-ink);}" +
+      ".cg-pinned-badge{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;" +
+      "color:var(--cg-accent);background:var(--cg-accent-tint);padding:3px 8px;border-radius:999px;margin:0 0 8px;}" +
       ".cg-desc{font-size:14px;color:var(--cg-muted);margin:0 0 8px;}" +
       ".cg-count{font-size:13px;color:var(--cg-muted);margin:0 0 12px;}" +
       ".cg-filters{display:flex;gap:8px;flex-wrap:wrap;}" +
@@ -148,15 +168,15 @@
       "background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;pointer-events:none;}" +
       ".cg-play svg{width:20px;height:20px;margin-left:2px;}" +
       ".cg-body{padding:14px;display:flex;flex-direction:column;gap:8px;flex:1;}" +
-      ".cg-headline{font-weight:700;font-size:14px;margin:0;}" +
-      ".cg-text{font-size:14px;line-height:1.55;margin:0;white-space:pre-line;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;-webkit-line-clamp:4;}" +
+      ".cg-headline{font-weight:700;font-size:14px;margin:0;color:var(--cg-ink);}" +
+      ".cg-text{font-size:14px;line-height:1.55;margin:0;white-space:pre-line;color:var(--cg-ink);display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;-webkit-line-clamp:4;}" +
       ".cg-card--has-media .cg-text{-webkit-line-clamp:3;}" +
       ".cg-card--text-only .cg-text{-webkit-line-clamp:8;}" +
       ".cg-text.cg-expanded{-webkit-line-clamp:unset;overflow:visible;}" +
       ".cg-readmore{background:none;border:none;color:var(--cg-accent);font-size:13px;font-weight:600;padding:0;cursor:pointer;align-self:flex-start;}" +
       ".cg-response{background:var(--cg-accent-tint);border-radius:10px;padding:10px;display:flex;gap:8px;align-items:flex-start;}" +
       ".cg-response svg{width:16px;height:16px;flex-shrink:0;margin-top:2px;color:var(--cg-accent);}" +
-      ".cg-response-body{font-size:12.5px;line-height:1.5;}" +
+      ".cg-response-body{font-size:12.5px;line-height:1.5;color:var(--cg-ink);}" +
       ".cg-response-body a{color:var(--cg-accent);text-decoration:underline;}" +
       ".cg-meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--cg-muted);flex-wrap:wrap;}" +
       ".cg-meta .name{font-weight:600;color:var(--cg-ink);}" +
@@ -196,6 +216,17 @@
       ".cg-lightbox-close svg{width:24px;height:24px;}" +
       "@media (prefers-reduced-motion:reduce){.contribly-gallery *{animation-duration:.001ms!important;transition-duration:.001ms!important;}}";
     document.head.appendChild(s);
+  }
+
+  var PRECONNECT_ID = "contribly-gallery-preconnect";
+  function addPreconnectOnce() {
+    if (document.getElementById(PRECONNECT_ID)) return;
+    var link = document.createElement("link");
+    link.id = PRECONNECT_ID;
+    link.rel = "preconnect";
+    link.href = "https://api.contribly.com";
+    link.crossOrigin = "anonymous";
+    document.head.appendChild(link);
   }
 
   // ---- DOMPurify (loaded on demand, only if a journalist reply exists) ----
@@ -310,6 +341,7 @@
       tags: [], selectedTag: "", sortBy: "",
       items: [], nextPage: 1, total: null, allLoaded: false, loadingPage: false, loadedBatches: 0,
       formId: null,
+      pinnedItem: null,
       impressionSent: false,
     };
   }
@@ -360,19 +392,14 @@
       .finally(function () { inst.loadingPage = false; });
   }
 
-  // Not independently verified against live data; mirrors the original
-  // widget's own approach for jumping straight to a shared contribution.
-  function fetchDeepLinkPage(inst, contributionId) {
-    return fetch(API_BASE + "/contributions/" + encodeURIComponent(contributionId) + "/assignment/" + encodeURIComponent(inst.assignmentId) + "/page")
-      .then(function (r) { if (!r.ok) throw new Error("deep link fetch failed"); return r.json(); })
-      .then(function (data) {
-        var list = data.contributions || data || [];
-        inst.items = list;
-        inst.loadedBatches = (data.page || 1);
-        inst.nextPage = inst.loadedBatches + 1;
-        if (list.length < PAGE_SIZE) inst.allLoaded = true;
-        return contributionId;
-      });
+  // Fixed after real-world testing: the endpoint borrowed from the original
+  // widget for jumping to a specific page did not reliably land on the
+  // right contribution. This uses the endpoint already proven throughout
+  // this project instead, and the shared item is pinned at the top of the
+  // gallery rather than located inside a specific page of results.
+  function fetchSharedContribution(contributionId) {
+    return fetch(API_BASE + "/contributions/" + encodeURIComponent(contributionId))
+      .then(function (r) { if (!r.ok) throw new Error("shared contribution fetch failed"); return r.json(); });
   }
 
   // ---- Rendering ----
@@ -386,7 +413,7 @@
     return frag;
   }
 
-  function buildCard(inst, item) {
+  function buildCard(inst, item, overflowChecks, isPinned) {
     var card = document.createElement("div");
     card.className = "cg-card";
     card.dataset.contributionId = item.id;
@@ -401,6 +428,8 @@
       img.className = "cg-media";
       img.loading = "lazy";
       img.alt = item.headline || "";
+      if (mediaInfo.width) img.width = mediaInfo.width;
+      if (mediaInfo.height) img.height = mediaInfo.height;
       img.src = mediaInfo.kind === "video" ? (mediaInfo.posterUrl || "") : mediaInfo.imageUrl;
       wrap.appendChild(img);
       if (mediaInfo.kind === "video") {
@@ -416,6 +445,13 @@
     var body = document.createElement("div");
     body.className = "cg-body";
 
+    if (isPinned) {
+      var badge = document.createElement("span");
+      badge.className = "cg-pinned-badge";
+      badge.textContent = translate(inst.lang, "sharedBadge");
+      body.appendChild(badge);
+    }
+
     if (item.headline) {
       var h = document.createElement("p");
       h.className = "cg-headline";
@@ -427,20 +463,7 @@
       t.className = "cg-text";
       t.textContent = item.body;
       body.appendChild(t);
-      // Detect real overflow after layout, only then show the toggle.
-      requestAnimationFrame(function () {
-        if (t.scrollHeight > t.clientHeight + 1) {
-          var btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "cg-readmore";
-          btn.textContent = translate(inst.lang, "readMore");
-          btn.addEventListener("click", function () {
-            t.classList.toggle("cg-expanded");
-            btn.style.display = t.classList.contains("cg-expanded") ? "none" : "";
-          });
-          t.insertAdjacentElement("afterend", btn);
-        }
-      });
+      if (overflowChecks) overflowChecks.push(t);
     }
 
     var hasResponse = item.journalistResponse && item.journalistResponse.text;
@@ -512,6 +535,18 @@
     body.appendChild(footer);
     card.appendChild(body);
     return card;
+  }
+
+  function attachReadMoreIfNeeded(inst, t) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cg-readmore";
+    btn.textContent = translate(inst.lang, "readMore");
+    btn.addEventListener("click", function () {
+      var expanded = t.classList.toggle("cg-expanded");
+      btn.textContent = expanded ? translate(inst.lang, "showLess") : translate(inst.lang, "readMore");
+    });
+    t.insertAdjacentElement("afterend", btn);
   }
 
   function handleShareClick(inst, item, shareBtn, shareWrap) {
@@ -644,12 +679,28 @@
     var grid = document.createElement("div");
     grid.className = "cg-grid";
     inst.gridEl = grid;
-    inst.root.appendChild(grid);
 
-    if (!inst.items.length) {
+    var visibleItems = inst.items.filter(function (i) { return !inst.pinnedItem || i.id !== inst.pinnedItem.id; });
+
+    if (!inst.pinnedItem && !visibleItems.length) {
       inst.root.appendChild(renderState(inst, "empty"));
     } else {
-      inst.items.forEach(function (item) { grid.appendChild(buildCard(inst, item)); });
+      var overflowChecks = [];
+      var frag = document.createDocumentFragment();
+      if (inst.pinnedItem) frag.appendChild(buildCard(inst, inst.pinnedItem, overflowChecks, true));
+      visibleItems.forEach(function (item) { frag.appendChild(buildCard(inst, item, overflowChecks, false)); });
+      grid.appendChild(frag);
+      inst.root.appendChild(grid);
+
+      if (overflowChecks.length) {
+        requestAnimationFrame(function () {
+          // Read every card's overflow first, then write all the buttons,
+          // rather than interleaving a read and a write per card.
+          var overflowing = overflowChecks.filter(function (t) { return t.scrollHeight > t.clientHeight + 1; });
+          overflowing.forEach(function (t) { attachReadMoreIfNeeded(inst, t); });
+        });
+      }
+
       if (!inst.allLoaded) {
         var loadMoreWrap = document.createElement("div");
         loadMoreWrap.className = "cg-loadmore-wrap";
@@ -700,6 +751,7 @@
 
   function initInstance(root) {
     injectStylesOnce();
+    addPreconnectOnce();
     root.setAttribute("data-contribly-initialised", "true");
     var inst = createInstance(root);
     if (!inst.assignmentId) { root.appendChild(renderState(inst, "error")); return; }
@@ -709,17 +761,18 @@
     var deepLinkId = null;
     try { deepLinkId = new URL(window.location.href).searchParams.get("contributionID"); } catch (e) {}
 
-    fetchAssignment(inst)
-      .then(function () { return fetchTags(inst); })
+    // These three don't depend on each other, so they're fired together
+    // rather than waited on one at a time.
+    var metaPromise = fetchAssignment(inst).then(function () { return fetchTags(inst); });
+    var listPromise = Promise.all([fetchTotalCount(inst), fetchPage(inst, 1)]);
+    var pinnedPromise = deepLinkId
+      ? fetchSharedContribution(deepLinkId).then(function (item) { inst.pinnedItem = item; }).catch(function () { inst.pinnedItem = null; })
+      : Promise.resolve();
+
+    Promise.all([metaPromise, listPromise, pinnedPromise])
       .then(function () {
-        if (deepLinkId) {
-          return fetchDeepLinkPage(inst, deepLinkId).then(function (id) {
-            inst.total = inst.total; // total not returned by this endpoint; leave as null, shown count omitted in that case
-            renderAll(inst);
-            scrollToAndHighlight(inst, id);
-          });
-        }
-        return Promise.all([fetchTotalCount(inst), fetchPage(inst, 1)]).then(function () { renderAll(inst); });
+        renderAll(inst);
+        if (inst.pinnedItem) scrollToAndHighlight(inst, inst.pinnedItem.id);
       })
       .catch(function () { root.innerHTML = ""; root.appendChild(renderState(inst, "error")); });
   }

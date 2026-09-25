@@ -33,9 +33,12 @@
       other quote widget, revisit if it becomes a real problem in practice.
     - The reply bubble uses white-space:pre-line so a journalist's plain
       paragraph breaks show up correctly even without typing HTML.
-    - The card caps at 480px wide and centres itself, regardless of how
+    - The card caps at 680px wide and centres itself, regardless of how
       wide the space it's given is, so it doesn't stretch into an
       illegibly wide bubble in a full-width desktop article column.
+      (Originally capped at 480px; real testing showed that was too
+      conservative, made every line wrap early and the page scroll far
+      more than it needed to. 680px is the corrected value.)
       Sizing below that responds to the widget's own rendered width via a
       container query, correct in a phone-width column or a narrow
       desktop sidebar alike.
@@ -98,7 +101,7 @@
       "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}" +
       ".contribly-we-respond *{box-sizing:border-box;}" +
       ".wr-card{--wr-ink:#17171a;--wr-muted:#6e6e76;--wr-accent:#4f46e5;--wr-accent-tint:#eef0ff;--wr-input:#f5f5f8;--wr-bg:#fff;--wr-rule:#ececf2;" +
-      "max-width:480px;margin:0 auto;background:var(--wr-bg);color:var(--wr-ink);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(20,20,43,.08);}" +
+      "max-width:680px;margin:0 auto;background:var(--wr-bg);color:var(--wr-ink);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(20,20,43,.08);}" +
       "@media (prefers-color-scheme:dark){.wr-card{--wr-ink:#f2f1f7;--wr-muted:#a3a2ad;--wr-accent:#a5a0fb;--wr-accent-tint:rgba(165,160,251,.15);--wr-input:#2a2a33;--wr-bg:#1c1c22;--wr-rule:rgba(242,241,247,.14);}}" +
       ".wr-head{display:flex;align-items:center;gap:10px;padding:18px 22px;border-bottom:1px solid var(--wr-rule);}" +
       ".wr-head .wr-mark{width:30px;height:30px;border-radius:50%;background:var(--wr-accent);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;}" +
@@ -134,11 +137,11 @@
       ".wr-actions button:focus-visible{outline:2px solid var(--wr-accent);outline-offset:2px;}" +
       ".wr-credit{display:block;text-align:center;font-size:11px;color:var(--wr-muted);padding:0 22px 16px;text-decoration:none;}" +
       ".wr-credit:hover{text-decoration:underline;}" +
-      ".wr-skeleton{max-width:480px;margin:0 auto;height:200px;border-radius:10px;background:linear-gradient(90deg,#e4e4e4 25%,#efefef 37%,#e4e4e4 63%);" +
+      ".wr-skeleton{max-width:680px;margin:0 auto;height:200px;border-radius:10px;background:linear-gradient(90deg,#e4e4e4 25%,#efefef 37%,#e4e4e4 63%);" +
       "background-size:400% 100%;animation:wr-shimmer 1.4s ease infinite;}" +
       "@media (prefers-color-scheme:dark){.wr-skeleton{background:linear-gradient(90deg,#2a2a33 25%,#34343f 37%,#2a2a33 63%);background-size:400% 100%;}}" +
       "@keyframes wr-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}" +
-      ".wr-state{max-width:480px;margin:0 auto;background:var(--wr-bg,#f5f5f5);padding:32px 16px;text-align:center;color:var(--wr-muted,#666);" +
+      ".wr-state{max-width:680px;margin:0 auto;background:var(--wr-bg,#f5f5f5);padding:32px 16px;text-align:center;color:var(--wr-muted,#666);" +
       "font-size:14px;display:flex;flex-direction:column;align-items:center;gap:8px;border-radius:10px;}" +
       ".wr-state svg{width:20px;height:20px;}" +
       "@container (max-width:380px){" +

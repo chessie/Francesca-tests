@@ -3,7 +3,7 @@
   =============================================================================
   EMBED (once this file is hosted somewhere public):
 
-    <div class="contribly-gallery" data-assignment="THE-ASSIGNMENT-ID" data-client="THE-CLIENT-ID" data-language="en-gb"></div>
+    <div class="contribly-gallery" data-assignment="THE-ASSIGNMENT-ID" data-language="en-gb"></div>
     <script src="https://YOUR-HOSTING-URL/contribly-gallery-widget.js" defer></script>
 
   This is a rebuild of Contribly's existing production gallery widget, kept
@@ -335,7 +335,6 @@
     return {
       root: root,
       assignmentId: root.getAttribute("data-assignment"),
-      clientId: root.getAttribute("data-client") || "Unknown",
       lang: root.getAttribute("data-language") || DEFAULT_LANGUAGE,
       calloutName: "", calloutDescription: "",
       tags: [], selectedTag: "", sortBy: "",
